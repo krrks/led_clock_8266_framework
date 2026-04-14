@@ -294,11 +294,11 @@ static void initNormal() {
     // 15-second WiFi attempt; if it fails WiFiManager starts its captive AP
     WiFiManager.begin(configManager.data.projectName, 15000);
 
-    g_wifiOK = (WiFiManager.getSSID().length() > 0);
+    g_wifiOK = (WiFiManager.SSID.length() > 0);
 
     if (g_wifiOK) {
         Serial.printf("[WIFI] Connected to: %s\n",
-                      WiFiManager.getSSID().c_str());
+                      WiFiManager.SSID.c_str());
         statusLED.setMode(StatusLED::OFF);
         timeSync.begin(configManager.data.timezone);
         taskSync.arm();     // sync NTP + weather immediately
