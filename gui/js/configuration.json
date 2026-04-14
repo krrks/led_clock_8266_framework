@@ -1,0 +1,72 @@
+[
+    {
+        "name": "projectName",
+        "type": "char",
+        "length": 32,
+        "value": "LED-CLOCK",
+        "label": "Device / AP Name"
+    },
+    {
+        "name": "city",
+        "type": "char",
+        "length": 32,
+        "value": "London",
+        "label": "City for Weather"
+    },
+    {
+        "name": "owmApiKey",
+        "type": "char",
+        "length": 48,
+        "value": "",
+        "label": "OpenWeatherMap API Key"
+    },
+    {
+        "name": "timezone",
+        "type": "char",
+        "length": 48,
+        "value": "UTC0",
+        "label": "Timezone (POSIX, e.g. CET-1CEST,M3.5.0,M10.5.0/3)"
+    },
+    {
+        "name": "brightness",
+        "type": "uint8_t",
+        "value": 1,
+        "label": "Brightness  0=dim  1=medium  2=full"
+    },
+    {
+        "name": "manualHour",
+        "type": "uint8_t",
+        "value": 12,
+        "label": "Manual Hour (0-23)"
+    },
+    {
+        "name": "manualMinute",
+        "type": "uint8_t",
+        "value": 0,
+        "label": "Manual Minute (0-59)"
+    },
+    {
+        "name": "manualDay",
+        "type": "uint8_t",
+        "value": 1,
+        "label": "Manual Day (1-31)"
+    },
+    {
+        "name": "manualMonth",
+        "type": "uint8_t",
+        "value": 1,
+        "label": "Manual Month (1-12)"
+    },
+    {
+        "name": "manualYear",
+        "type": "int",
+        "value": 2025,
+        "label": "Manual Year"
+    },
+    {
+        "name": "manualWeekday",
+        "type": "uint8_t",
+        "value": 1,
+        "label": "Manual Weekday  1=Mon  7=Sun"
+    }
+]

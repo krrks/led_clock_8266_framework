@@ -1,0 +1,375 @@
+name: Build & Release Firmware
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build (ignore change detection)'
+        required: false
+        default: true
+        type: boolean
+
+# ════════════════════════════════════════════════════════════════════════════
+# Job 1 — Pre-flight checks
+# ════════════════════════════════════════════════════════════════════════════
+jobs:
+  check:
+    name: Pre-flight checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_build:    ${{ steps.decision.outputs.should_build }}
+      compile_firmware: ${{ steps.decision.outputs.compile_firmware }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Check if source files have any relevant changes ───────────────────
+      # Watches: src/, gui/, platformio.ini, CHANGELOG.md
+      - name: Check for relevant changes
+        id: relevance
+        if: github.event_name == 'push'
+        run: |
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          if [ -z "$CHANGED" ]; then
+            echo "no_relevant_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            RELEVANT=$(echo "$CHANGED" | grep -E '^(src/|gui/|platformio\.ini|CHANGELOG\.md)' || true)
+            if [ -z "$RELEVANT" ]; then
+              echo "ℹ️  No changes in src/, gui/, platformio.ini or CHANGELOG.md — skipping build"
+              echo "no_relevant_changes=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Relevant changes detected:"
+              echo "$RELEVANT"
+              echo "no_relevant_changes=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      # ── Read build flag from CHANGELOG.md first line ─────────────────────
+      # First line must be either:  #!build  (compile)  or  #!no-build (skip)
+      - name: Read build flag from CHANGELOG.md
+        id: build_flag
+        run: |
+          FLAG="build"
+          CHANGELOG="CHANGELOG.md"
+
+          if [ -f "$CHANGELOG" ]; then
+            FIRST_LINE=$(head -1 "$CHANGELOG" | tr -d '[:space:]')
+            echo "Read flag from CHANGELOG.md: '$FIRST_LINE'"
+          else
+            echo "No CHANGELOG.md found — defaulting to #!build"
+            FIRST_LINE=""
+          fi
+
+          case "$FIRST_LINE" in
+            "#!no-build")
+              FLAG="no-build"
+              echo "Build flag: #!no-build — firmware compilation will be skipped"
+              ;;
+            "#!build")
+              FLAG="build"
+              echo "Build flag: #!build — firmware compilation enabled"
+              ;;
+            *)
+              echo "No recognised build flag — defaulting to #!build (compile)"
+              ;;
+          esac
+
+          echo "flag=$FLAG" >> "$GITHUB_OUTPUT"
+
+      # ── Decide whether to build ───────────────────────────────────────────
+      - name: Decide whether to build
+        id: decision
+        env:
+          EVENT:               ${{ github.event_name }}
+          NO_RELEVANT_CHANGES: ${{ steps.relevance.outputs.no_relevant_changes }}
+          FORCE:               ${{ github.event.inputs.force_build }}
+          BUILD_FLAG:          ${{ steps.build_flag.outputs.flag }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$FORCE" = "true" ]; then
+            echo "should_build=true"      >> "$GITHUB_OUTPUT"
+            echo "compile_firmware=true"  >> "$GITHUB_OUTPUT"
+            echo "Force build — compiling firmware"
+
+          elif [ "$NO_RELEVANT_CHANGES" = "true" ]; then
+            echo "should_build=false"     >> "$GITHUB_OUTPUT"
+            echo "compile_firmware=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping: no changes in src/, gui/, platformio.ini or CHANGELOG.md"
+
+          elif [ "$BUILD_FLAG" = "no-build" ]; then
+            echo "should_build=false"     >> "$GITHUB_OUTPUT"
+            echo "compile_firmware=false" >> "$GITHUB_OUTPUT"
+            echo "#!no-build flag set — skipping compilation"
+
+          else
+            echo "should_build=true"      >> "$GITHUB_OUTPUT"
+            echo "compile_firmware=true"  >> "$GITHUB_OUTPUT"
+            echo "Will compile firmware"
+          fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# Job 2 — Build & Release
+# ════════════════════════════════════════════════════════════════════════════
+  build:
+    name: Build & Release Firmware
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # ── 2. Compute next version tag ───────────────────────────────────────
+      - name: Compute next version tag
+        id: version
+        if: needs.check.outputs.compile_firmware == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST=$(gh release view --json tagName -q '.tagName' 2>/dev/null \
+                   | grep -E '^v1\.[0-9]+$' || echo "")
+
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.001"
+          else
+            SEQ=$(echo "$LATEST" | sed 's/v1\.//')
+            NEXT_SEQ=$(printf "%03d" $((10#$SEQ + 1)))
+            NEXT="v1.$NEXT_SEQ"
+          fi
+
+          echo "✅ Latest: ${LATEST:-none}  →  Next: $NEXT"
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+
+      # ── 3. Set up Python ─────────────────────────────────────────────────
+      - name: Set up Python
+        if: needs.check.outputs.compile_firmware == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 4. Cache PlatformIO packages & toolchain ──────────────────────────
+      - name: Cache PlatformIO
+        if: needs.check.outputs.compile_firmware == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      # ── 5. Install PlatformIO ─────────────────────────────────────────────
+      - name: Install PlatformIO
+        if: needs.check.outputs.compile_firmware == 'true'
+        run: |
+          pip install --upgrade pip
+          pip install platformio
+          echo "✅ PlatformIO $(pio --version)"
+
+      # ── 6. Set up Node.js (required for framework GUI rebuild) ────────────
+      - name: Set up Node.js
+        if: needs.check.outputs.compile_firmware == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # ── 7. Install framework JS dependencies ─────────────────────────────
+      # The maakbaas framework uses webpack to bundle the React GUI into html.h
+      - name: Install framework JS dependencies
+        if: needs.check.outputs.compile_firmware == 'true'
+        run: |
+          # PlatformIO installs the framework under ~/.platformio/lib
+          # We need to run npm ci inside it so webpack is available at build time.
+          # First do a dry-run pio install to resolve lib paths.
+          pio pkg install --environment d1_mini 2>&1 | tail -5
+
+          FW_DIR=$(find ~/.platformio -maxdepth 4 \
+                    -type d -name "ESP8266 IoT Framework" 2>/dev/null | head -1)
+
+          if [ -n "$FW_DIR" ] && [ -f "$FW_DIR/package.json" ]; then
+            echo "Found framework at: $FW_DIR"
+            cd "$FW_DIR"
+            npm ci --legacy-peer-deps
+            echo "✅ npm packages installed"
+          else
+            echo "⚠️  Framework package.json not found — GUI rebuild may fail"
+            echo "     Searched under ~/.platformio"
+          fi
+
+      # ── 8. Compile firmware ───────────────────────────────────────────────
+      - name: Compile firmware
+        if: needs.check.outputs.compile_firmware == 'true'
+        run: |
+          echo "── PlatformIO build ────────────────────────────────────"
+          pio run --environment d1_mini
+          echo "────────────────────────────────────────────────────────"
+
+          BIN=".pio/build/d1_mini/firmware.bin"
+          if [ -f "$BIN" ]; then
+            SIZE=$(du -sh "$BIN" | cut -f1)
+            echo "✅ firmware.bin  size: $SIZE"
+          else
+            echo "FATAL: firmware.bin not found after build"
+            exit 1
+          fi
+
+      # ── 9. Stamp version into firmware filename ───────────────────────────
+      - name: Rename firmware with version tag
+        if: needs.check.outputs.compile_firmware == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          SRC=".pio/build/d1_mini/firmware.bin"
+          DST="firmware-${TAG}.bin"
+          cp "$SRC" "$DST"
+          echo "firmware_file=$DST" >> "$GITHUB_ENV"
+          echo "✅ Renamed to $DST"
+
+      # ── 10. Upload firmware artifact ──────────────────────────────────────
+      - name: Upload firmware artifact
+        if: needs.check.outputs.compile_firmware == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ steps.version.outputs.tag }}
+          path: firmware-${{ steps.version.outputs.tag }}.bin
+          retention-days: 30
+
+      # ── 11. Create GitHub Release ─────────────────────────────────────────
+      - name: Create GitHub Release
+        if: needs.check.outputs.compile_firmware == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:      ${{ steps.version.outputs.tag }}
+        run: |
+          CHANGELOG="CHANGELOG.md"
+          if [ -f "$CHANGELOG" ]; then
+            BODY=$(grep -v '^#!' "$CHANGELOG" | head -120)
+          else
+            BODY="Auto build — no changelog provided."
+          fi
+
+          gh release create "$TAG" \
+            --title "Release $TAG" \
+            --notes "$BODY" \
+            "$firmware_file"
+
+          echo "✅ Released: $TAG  ($firmware_file)"
+
+# ════════════════════════════════════════════════════════════════════════════
+# Job 3 — Cleanup old releases & workflow runs
+# ════════════════════════════════════════════════════════════════════════════
+  cleanup:
+    name: Cleanup Old Releases & Runs
+    needs: [check, build]
+    if: |
+      needs.check.outputs.compile_firmware == 'true' &&
+      needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      # ── Keep newest 10 releases ───────────────────────────────────────────
+      - name: 🧹 Delete old releases (keep newest 10)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          KEEP:     10
+        run: |
+          set -e
+          echo "── Releases ──────────────────────────────────"
+
+          RELEASE_IDS=$(gh api "repos/$REPO/releases" \
+            --paginate \
+            --jq '.[].id' \
+            | head -200)
+
+          TOTAL=$(echo "$RELEASE_IDS" | grep -c . || true)
+          echo "Total releases: $TOTAL  |  Keeping newest: $KEEP"
+
+          if [ "$TOTAL" -le "$KEEP" ]; then
+            echo "Nothing to delete."
+          else
+            TO_DELETE=$(echo "$RELEASE_IDS" | tail -n "+$(( KEEP + 1 ))")
+            COUNT=$(echo "$TO_DELETE" | grep -c . || true)
+            echo "Deleting $COUNT old release(s)..."
+
+            echo "$TO_DELETE" | while read -r rid; do
+              [ -z "$rid" ] && continue
+              TAG=$(gh api "repos/$REPO/releases/$rid" --jq '.tag_name' 2>/dev/null || echo "")
+              gh api --method DELETE "repos/$REPO/releases/$rid" && \
+                echo "  ✅ Deleted release $rid  (tag: ${TAG:-unknown})" || \
+                echo "  ⚠️  Failed to delete release $rid"
+              if [ -n "$TAG" ]; then
+                gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG" 2>/dev/null && \
+                  echo "     🏷️  Deleted tag $TAG" || \
+                  echo "     ⚠️  Tag $TAG not found or already deleted"
+              fi
+            done
+          fi
+
+      # ── Keep newest 10 runs per workflow ──────────────────────────────────
+      - name: 🧹 Delete old workflow runs (keep newest 10 per workflow)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          KEEP:     10
+        run: |
+          set -e
+          echo "── Workflow Runs ──────────────────────────────"
+
+          WORKFLOW_IDS=$(gh api "repos/$REPO/actions/workflows" \
+            --paginate \
+            --jq '.workflows[].id')
+
+          for WF_ID in $WORKFLOW_IDS; do
+            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" \
+              --jq '.name' 2>/dev/null || echo "id=$WF_ID")
+            echo ""
+            echo "  Workflow: $WF_NAME (id=$WF_ID)"
+
+            RUN_IDS=$(gh api "repos/$REPO/actions/workflows/$WF_ID/runs" \
+              --paginate \
+              --jq '.workflow_runs[].id' \
+              | head -200)
+
+            TOTAL=$(echo "$RUN_IDS" | grep -c . || true)
+            echo "  Total runs: $TOTAL  |  Keeping newest: $KEEP"
+
+            if [ "$TOTAL" -le "$KEEP" ]; then
+              echo "  Nothing to delete."
+              continue
+            fi
+
+            TO_DELETE=$(echo "$RUN_IDS" | tail -n "+$(( KEEP + 1 ))")
+            COUNT=$(echo "$TO_DELETE" | grep -c . || true)
+            echo "  Deleting $COUNT old run(s)..."
+
+            echo "$TO_DELETE" | while read -r run_id; do
+              [ -z "$run_id" ] && continue
+              gh api --method DELETE "repos/$REPO/actions/runs/$run_id" && \
+                echo "    ✅ Deleted run $run_id" || \
+                echo "    ⚠️  Failed to delete run $run_id"
+            done
+          done
+
+          echo ""
+          echo "=== Cleanup complete ==="

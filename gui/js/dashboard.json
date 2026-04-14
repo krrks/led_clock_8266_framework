@@ -1,0 +1,33 @@
+[
+    {
+        "name": "currentTime",
+        "type": "char",
+        "length": 8,
+        "value": "--:--",
+        "label": "Current Time"
+    },
+    {
+        "name": "weatherCode",
+        "type": "int",
+        "value": 0,
+        "label": "Weather Condition Code (OWM)"
+    },
+    {
+        "name": "wifiRSSI",
+        "type": "int",
+        "value": 0,
+        "label": "WiFi Signal (dBm)"
+    },
+    {
+        "name": "ntpSynced",
+        "type": "int",
+        "value": 0,
+        "label": "NTP Synced (1=yes 0=no)"
+    },
+    {
+        "name": "recoveryMode",
+        "type": "int",
+        "value": 0,
+        "label": "Recovery Mode (1=yes 0=no)"
+    }
+]

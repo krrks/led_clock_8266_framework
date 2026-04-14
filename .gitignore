@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+node_modules/
+package-lock.json
+src/generated/
+*.bin
+*.elf
