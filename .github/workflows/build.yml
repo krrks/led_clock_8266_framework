@@ -124,9 +124,7 @@ jobs:
 
           if ! git diff --cached --quiet; then
             NOTE=$(grep -v '^#!' zip_update/CHANGELOG.md 2>/dev/null | head -80 || echo "")
-            git commit -m "chore: apply patch $PATCH_NAME [skip ci]
-
-$NOTE"
+            git commit -m "chore: apply patch $PATCH_NAME [skip ci] $NOTE"
             git push origin HEAD
             echo "✅ Committed and pushed"
           else
