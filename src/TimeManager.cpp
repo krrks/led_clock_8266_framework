@@ -1,6 +1,6 @@
 // TimeManager.cpp
 #include "TimeManager.h"
-#include "timeSync.h"   // framework timeSync singleton
+#include <timeSync.h>     // note the < > instead of " "   // framework timeSync singleton
 
 TimeManager::TimeManager()
     : _manualBase(0), _manualBaseMillis(0), _manualSet(false),
