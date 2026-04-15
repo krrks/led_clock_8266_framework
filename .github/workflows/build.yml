@@ -2,30 +2,30 @@ name: Build & Release Firmware
 
 on:
   push:
-    branches:
-      - '**'
+    branches: [ '**' ]
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       force_build:
-        description: 'Force build (ignore change detection)'
+        description: 'Force build even if no changes'
         required: false
-        default: true
+        default: false
         type: boolean
 
-# ════════════════════════════════════════════════════════════════════════════
-# Job 1 — Pre-flight checks
-# ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# Job 1: Check & Decision
+# ════════════════════════════════════════════════════════════════════
 jobs:
   check:
-    name: Pre-flight checks
+    name: Pre-flight Check
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      should_build:    ${{ steps.decision.outputs.should_build }}
+      patch_found:      ${{ steps.find_patch.outputs.patch_found }}
+      patch_path:       ${{ steps.find_patch.outputs.patch_path }}
+      should_apply:     ${{ steps.decision.outputs.should_apply }}
       compile_firmware: ${{ steps.decision.outputs.compile_firmware }}
 
     steps:
@@ -34,139 +34,137 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ── Check if source files have any relevant changes ───────────────────
-      # Watches: src/, gui/, platformio.ini, CHANGELOG.md
-      - name: Check for relevant changes
-        id: relevance
-        if: github.event_name == 'push'
+      - name: Find latest patch zip
+        id: find_patch
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
-          if [ -z "$CHANGED" ]; then
-            echo "no_relevant_changes=false" >> "$GITHUB_OUTPUT"
+          ZIP=$(find zip_update/patches -maxdepth 1 -name 'update_*.zip' 2>/dev/null \
+                | sort -t_ -k2 -n | tail -n1 || echo "")
+          if [ -n "$ZIP" ]; then
+            echo "patch_found=true"  >> "$GITHUB_OUTPUT"
+            echo "patch_path=$ZIP"   >> "$GITHUB_OUTPUT"
+            echo "✅ Found patch: $ZIP"
           else
-            RELEVANT=$(echo "$CHANGED" | grep -E '^(src/|gui/|platformio\.ini|CHANGELOG\.md)' || true)
-            if [ -z "$RELEVANT" ]; then
-              echo "ℹ️  No changes in src/, gui/, platformio.ini or CHANGELOG.md — skipping build"
-              echo "no_relevant_changes=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "Relevant changes detected:"
-              echo "$RELEVANT"
-              echo "no_relevant_changes=false" >> "$GITHUB_OUTPUT"
-            fi
+            echo "patch_found=false" >> "$GITHUB_OUTPUT"
+            echo "patch_path="       >> "$GITHUB_OUTPUT"
+            echo "ℹ️  No patch found — building current code"
           fi
 
-      # ── Read build flag from CHANGELOG.md first line ─────────────────────
-      # First line must be either:  #!build  (compile)  or  #!no-build (skip)
-      - name: Read build flag from CHANGELOG.md
-        id: build_flag
-        run: |
-          FLAG="build"
-          CHANGELOG="CHANGELOG.md"
-
-          if [ -f "$CHANGELOG" ]; then
-            FIRST_LINE=$(head -1 "$CHANGELOG" | tr -d '[:space:]')
-            echo "Read flag from CHANGELOG.md: '$FIRST_LINE'"
-          else
-            echo "No CHANGELOG.md found — defaulting to #!build"
-            FIRST_LINE=""
-          fi
-
-          case "$FIRST_LINE" in
-            "#!no-build")
-              FLAG="no-build"
-              echo "Build flag: #!no-build — firmware compilation will be skipped"
-              ;;
-            "#!build")
-              FLAG="build"
-              echo "Build flag: #!build — firmware compilation enabled"
-              ;;
-            *)
-              echo "No recognised build flag — defaulting to #!build (compile)"
-              ;;
-          esac
-
-          echo "flag=$FLAG" >> "$GITHUB_OUTPUT"
-
-      # ── Decide whether to build ───────────────────────────────────────────
-      - name: Decide whether to build
+      - name: Decide actions
         id: decision
-        env:
-          EVENT:               ${{ github.event_name }}
-          NO_RELEVANT_CHANGES: ${{ steps.relevance.outputs.no_relevant_changes }}
-          FORCE:               ${{ github.event.inputs.force_build }}
-          BUILD_FLAG:          ${{ steps.build_flag.outputs.flag }}
         run: |
-          if [ "$EVENT" = "workflow_dispatch" ] && [ "$FORCE" = "true" ]; then
-            echo "should_build=true"      >> "$GITHUB_OUTPUT"
-            echo "compile_firmware=true"  >> "$GITHUB_OUTPUT"
-            echo "Force build — compiling firmware"
-
-          elif [ "$NO_RELEVANT_CHANGES" = "true" ]; then
-            echo "should_build=false"     >> "$GITHUB_OUTPUT"
-            echo "compile_firmware=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping: no changes in src/, gui/, platformio.ini or CHANGELOG.md"
-
-          elif [ "$BUILD_FLAG" = "no-build" ]; then
-            echo "should_build=false"     >> "$GITHUB_OUTPUT"
-            echo "compile_firmware=false" >> "$GITHUB_OUTPUT"
-            echo "#!no-build flag set — skipping compilation"
-
+          PATCH="${{ steps.find_patch.outputs.patch_found }}"
+          FORCE="${{ github.event.inputs.force_build }}"
+          if [ "$PATCH" = "true" ]; then
+            echo "should_apply=true" >> "$GITHUB_OUTPUT"
           else
-            echo "should_build=true"      >> "$GITHUB_OUTPUT"
-            echo "compile_firmware=true"  >> "$GITHUB_OUTPUT"
-            echo "Will compile firmware"
+            echo "should_apply=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "compile_firmware=true" >> "$GITHUB_OUTPUT"
+          echo "Decision → patch=$PATCH force=$FORCE"
 
-# ════════════════════════════════════════════════════════════════════════════
-# Job 2 — Build & Release
-# ════════════════════════════════════════════════════════════════════════════
-  build:
-    name: Build & Release Firmware
+# ════════════════════════════════════════════════════════════════════
+# Job 2: Apply Patch
+# ════════════════════════════════════════════════════════════════════
+  apply-patch:
+    name: Apply Patch
     needs: check
-    if: needs.check.outputs.should_build == 'true'
+    if: needs.check.outputs.should_apply == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      # ── 1. Checkout ───────────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # ── 2. Compute next version tag ───────────────────────────────────────
-      - name: Compute next version tag
-        id: version
-        if: needs.check.outputs.compile_firmware == 'true'
+      - name: Extract & validate patch
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PATCH_PATH: ${{ needs.check.outputs.patch_path }}
         run: |
-          LATEST=$(gh release view --json tagName -q '.tagName' 2>/dev/null \
-                   | grep -E '^v1\.[0-9]+$' || echo "")
+          set -euo pipefail
+          echo "Extracting: $PATCH_PATH"
+          mkdir -p _patch_tmp
+          unzip -o "$PATCH_PATH" -d _patch_tmp
 
-          if [ -z "$LATEST" ]; then
-            NEXT="v1.001"
-          else
-            SEQ=$(echo "$LATEST" | sed 's/v1\.//')
-            NEXT_SEQ=$(printf "%03d" $((10#$SEQ + 1)))
-            NEXT="v1.$NEXT_SEQ"
+          if find _patch_tmp -type d -name '.github' | grep -q '.'; then
+            echo "❌ Patch contains .github/ — aborting for security"
+            exit 1
           fi
 
-          echo "✅ Latest: ${LATEST:-none}  →  Next: $NEXT"
-          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+          rsync -av --exclude='.github' _patch_tmp/ .
+          rm -rf _patch_tmp
+          echo "✅ Patch extracted"
 
-      # ── 3. Set up Python ─────────────────────────────────────────────────
-      - name: Set up Python
-        if: needs.check.outputs.compile_firmware == 'true'
+      - name: Run apply.sh
+        run: |
+          if [ -f "zip_update/patches/apply.sh" ]; then
+            echo "Running apply.sh..."
+            chmod +x zip_update/patches/apply.sh
+            bash zip_update/patches/apply.sh
+            echo "✅ apply.sh completed"
+          else
+            echo "No apply.sh found — skipping"
+          fi
+
+      - name: Commit patch results
+        run: |
+          PATCH_NAME=$(basename "${{ needs.check.outputs.patch_path }}" .zip)
+          rm -f zip_update/patches/*.zip zip_update/patches/apply.sh
+
+          echo "$PATCH_NAME" >> zip_update/applied_patches.txt
+          tail -n 50 zip_update/applied_patches.txt > /tmp/ap.txt \
+            && mv /tmp/ap.txt zip_update/applied_patches.txt
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if ! git diff --cached --quiet; then
+            NOTE=$(grep -v '^#!' zip_update/CHANGELOG.md 2>/dev/null | head -80 || echo "")
+            git commit -m "chore: apply patch $PATCH_NAME [skip ci]
+
+$NOTE"
+            git push origin HEAD
+            echo "✅ Committed and pushed"
+          else
+            echo "No changes to commit after patch"
+          fi
+
+# ════════════════════════════════════════════════════════════════════
+# Job 3: Build Firmware
+# Runs whether apply-patch succeeded OR was skipped (no patch found)
+# ════════════════════════════════════════════════════════════════════
+  build:
+    name: Build Firmware
+    needs: [check, apply-patch]
+    if: |
+      always() &&
+      needs.check.outputs.compile_firmware == 'true' &&
+      (needs.apply-patch.result == 'success' || needs.apply-patch.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code (after patch commit)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Pull latest (picks up patch commit if any)
+        run: git pull --rebase origin ${{ github.ref_name }} || true
+
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ── 4. Cache PlatformIO packages & toolchain ──────────────────────────
       - name: Cache PlatformIO
-        if: needs.check.outputs.compile_firmware == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -175,201 +173,108 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
-      # ── 5. Install PlatformIO ─────────────────────────────────────────────
       - name: Install PlatformIO
-        if: needs.check.outputs.compile_firmware == 'true'
-        run: |
-          pip install --upgrade pip
-          pip install platformio
-          echo "✅ PlatformIO $(pio --version)"
+        run: pip install --upgrade pip platformio
 
-      # ── 6. Set up Node.js (required for framework GUI rebuild) ────────────
-      - name: Set up Node.js
-        if: needs.check.outputs.compile_firmware == 'true'
+      - name: Set up Node.js 18 (for GUI webpack)
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
-      # ── 7. Install framework JS dependencies ─────────────────────────────
-      # The maakbaas framework uses webpack to bundle the React GUI into html.h
-      - name: Install framework JS dependencies
-        if: needs.check.outputs.compile_firmware == 'true'
+      - name: Install GUI JS dependencies
         run: |
-          # PlatformIO installs the framework under ~/.platformio/lib
-          # We need to run npm ci inside it so webpack is available at build time.
-          # First do a dry-run pio install to resolve lib paths.
-          pio pkg install --environment d1_mini 2>&1 | tail -5
-
-          FW_DIR=$(find ~/.platformio -maxdepth 4 \
-                    -type d -name "ESP8266 IoT Framework" 2>/dev/null | head -1)
-
+          pio pkg install --environment d1_mini --silent 2>/dev/null || true
+          FW_DIR=$(find ~/.platformio -type d -name "*ESP8266 IoT Framework*" 2>/dev/null | head -1 || echo "")
           if [ -n "$FW_DIR" ] && [ -f "$FW_DIR/package.json" ]; then
-            echo "Found framework at: $FW_DIR"
-            cd "$FW_DIR"
-            npm ci --legacy-peer-deps
-            echo "✅ npm packages installed"
-          else
-            echo "⚠️  Framework package.json not found — GUI rebuild may fail"
-            echo "     Searched under ~/.platformio"
+            echo "Installing JS deps in $FW_DIR"
+            (cd "$FW_DIR" && npm ci --legacy-peer-deps)
           fi
 
-      # ── 8. Compile firmware ───────────────────────────────────────────────
-      - name: Compile firmware
-        if: needs.check.outputs.compile_firmware == 'true'
-        run: |
-          echo "── PlatformIO build ────────────────────────────────────"
-          pio run --environment d1_mini
-          echo "────────────────────────────────────────────────────────"
+      - name: Build Firmware (d1_mini)
+        run: pio run -e d1_mini
 
-          BIN=".pio/build/d1_mini/firmware.bin"
-          if [ -f "$BIN" ]; then
-            SIZE=$(du -sh "$BIN" | cut -f1)
-            echo "✅ firmware.bin  size: $SIZE"
-          else
-            echo "FATAL: firmware.bin not found after build"
-            exit 1
-          fi
-
-      # ── 9. Stamp version into firmware filename ───────────────────────────
-      - name: Rename firmware with version tag
-        if: needs.check.outputs.compile_firmware == 'true'
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          SRC=".pio/build/d1_mini/firmware.bin"
-          DST="firmware-${TAG}.bin"
-          cp "$SRC" "$DST"
-          echo "firmware_file=$DST" >> "$GITHUB_ENV"
-          echo "✅ Renamed to $DST"
-
-      # ── 10. Upload firmware artifact ──────────────────────────────────────
       - name: Upload firmware artifact
-        if: needs.check.outputs.compile_firmware == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ steps.version.outputs.tag }}
-          path: firmware-${{ steps.version.outputs.tag }}.bin
+          name: firmware-d1_mini
+          path: .pio/build/d1_mini/firmware.bin
           retention-days: 30
 
-      # ── 11. Create GitHub Release ─────────────────────────────────────────
+      # Only cut a release on main branch pushes
       - name: Create GitHub Release
-        if: needs.check.outputs.compile_firmware == 'true'
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG:      ${{ steps.version.outputs.tag }}
         run: |
-          CHANGELOG="CHANGELOG.md"
-          if [ -f "$CHANGELOG" ]; then
-            BODY=$(grep -v '^#!' "$CHANGELOG" | head -120)
-          else
-            BODY="Auto build — no changelog provided."
-          fi
-
+          TAG="v$(date +%Y.%m%d.%H%M)"
+          BODY=$(grep -v '^#!' zip_update/CHANGELOG.md 2>/dev/null || echo "Automated firmware build")
           gh release create "$TAG" \
-            --title "Release $TAG" \
+            --title "Firmware $TAG" \
             --notes "$BODY" \
-            "$firmware_file"
+            .pio/build/d1_mini/firmware.bin
+          echo "✅ Release $TAG created"
 
-          echo "✅ Released: $TAG  ($firmware_file)"
-
-# ════════════════════════════════════════════════════════════════════════════
-# Job 3 — Cleanup old releases & workflow runs
-# ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# Job 4: Cleanup (main branch only, after successful build)
+# ════════════════════════════════════════════════════════════════════
   cleanup:
     name: Cleanup Old Releases & Runs
     needs: [check, build]
     if: |
-      needs.check.outputs.compile_firmware == 'true' &&
-      needs.build.result == 'success'
+      always() &&
+      needs.build.result == 'success' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: write
 
     steps:
-      # ── Keep newest 10 releases ───────────────────────────────────────────
-      - name: 🧹 Delete old releases (keep newest 10)
+      - name: Delete old releases (keep newest 10)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
-          KEEP:     10
+          KEEP:     "10"
         run: |
-          set -e
-          echo "── Releases ──────────────────────────────────"
-
-          RELEASE_IDS=$(gh api "repos/$REPO/releases" \
-            --paginate \
-            --jq '.[].id' \
-            | head -200)
-
-          TOTAL=$(echo "$RELEASE_IDS" | grep -c . || true)
-          echo "Total releases: $TOTAL  |  Keeping newest: $KEEP"
+          echo "── Cleaning up old releases ──────────────────────────────"
+          RELEASE_IDS=$(gh api "repos/$REPO/releases" --paginate --jq '.[].id' 2>/dev/null || echo "")
+          TOTAL=$(echo "$RELEASE_IDS" | grep -c . 2>/dev/null || echo 0)
 
           if [ "$TOTAL" -le "$KEEP" ]; then
-            echo "Nothing to delete."
+            echo "Only $TOTAL releases — nothing to delete"
           else
-            TO_DELETE=$(echo "$RELEASE_IDS" | tail -n "+$(( KEEP + 1 ))")
-            COUNT=$(echo "$TO_DELETE" | grep -c . || true)
-            echo "Deleting $COUNT old release(s)..."
-
-            echo "$TO_DELETE" | while read -r rid; do
+            echo "$RELEASE_IDS" | tail -n "+$((KEEP + 1))" | while read -r rid; do
               [ -z "$rid" ] && continue
               TAG=$(gh api "repos/$REPO/releases/$rid" --jq '.tag_name' 2>/dev/null || echo "")
-              gh api --method DELETE "repos/$REPO/releases/$rid" && \
-                echo "  ✅ Deleted release $rid  (tag: ${TAG:-unknown})" || \
-                echo "  ⚠️  Failed to delete release $rid"
+              gh api --method DELETE "repos/$REPO/releases/$rid" \
+                && echo "  ✅ Deleted release $rid (${TAG})" \
+                || echo "  ⚠️  Failed to delete release $rid"
               if [ -n "$TAG" ]; then
-                gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG" 2>/dev/null && \
-                  echo "     🏷️  Deleted tag $TAG" || \
-                  echo "     ⚠️  Tag $TAG not found or already deleted"
+                gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG" 2>/dev/null \
+                  && echo "     🏷️  Deleted tag $TAG"
               fi
             done
           fi
 
-      # ── Keep newest 10 runs per workflow ──────────────────────────────────
-      - name: 🧹 Delete old workflow runs (keep newest 10 per workflow)
+      - name: Delete old workflow runs (keep newest 15)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
-          KEEP:     10
+          KEEP:     "15"
         run: |
-          set -e
-          echo "── Workflow Runs ──────────────────────────────"
-
-          WORKFLOW_IDS=$(gh api "repos/$REPO/actions/workflows" \
-            --paginate \
-            --jq '.workflows[].id')
-
-          for WF_ID in $WORKFLOW_IDS; do
-            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" \
-              --jq '.name' 2>/dev/null || echo "id=$WF_ID")
-            echo ""
-            echo "  Workflow: $WF_NAME (id=$WF_ID)"
-
+          echo "── Cleaning up old workflow runs ─────────────────────────"
+          for WF_ID in $(gh api "repos/$REPO/actions/workflows" --paginate --jq '.workflows[].id' 2>/dev/null); do
+            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" --jq '.name' 2>/dev/null || echo "id=$WF_ID")
             RUN_IDS=$(gh api "repos/$REPO/actions/workflows/$WF_ID/runs" \
-              --paginate \
-              --jq '.workflow_runs[].id' \
-              | head -200)
-
-            TOTAL=$(echo "$RUN_IDS" | grep -c . || true)
-            echo "  Total runs: $TOTAL  |  Keeping newest: $KEEP"
-
-            if [ "$TOTAL" -le "$KEEP" ]; then
-              echo "  Nothing to delete."
-              continue
-            fi
-
-            TO_DELETE=$(echo "$RUN_IDS" | tail -n "+$(( KEEP + 1 ))")
-            COUNT=$(echo "$TO_DELETE" | grep -c . || true)
-            echo "  Deleting $COUNT old run(s)..."
-
-            echo "$TO_DELETE" | while read -r run_id; do
+                        --paginate --jq '.workflow_runs[].id' 2>/dev/null | head -200)
+            TOTAL=$(echo "$RUN_IDS" | grep -c . 2>/dev/null || echo 0)
+            [ "$TOTAL" -le "$KEEP" ] && continue
+            echo "  Workflow: $WF_NAME — deleting $((TOTAL - KEEP)) old run(s)"
+            echo "$RUN_IDS" | tail -n "+$((KEEP + 1))" | while read -r run_id; do
               [ -z "$run_id" ] && continue
-              gh api --method DELETE "repos/$REPO/actions/runs/$run_id" && \
-                echo "    ✅ Deleted run $run_id" || \
-                echo "    ⚠️  Failed to delete run $run_id"
+              gh api --method DELETE "repos/$REPO/actions/runs/$run_id" 2>/dev/null \
+                && echo "    ✅ Deleted run $run_id" \
+                || echo "    ⚠️  Failed run $run_id"
             done
           done
-
-          echo ""
-          echo "=== Cleanup complete ==="
+          echo "=== Cleanup done ==="
