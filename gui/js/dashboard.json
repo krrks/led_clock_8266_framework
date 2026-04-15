@@ -1,33 +1,79 @@
 [
     {
+        "type": "header",
+        "text": "Clock"
+    },
+    {
         "name": "currentTime",
+        "label": "Current Time",
         "type": "char",
-        "length": 8,
-        "value": "--:--",
-        "label": "Current Time"
+        "length": 9,
+        "direction": "display"
     },
     {
-        "name": "weatherCode",
-        "type": "int",
-        "value": 0,
-        "label": "Weather Condition Code (OWM)"
+        "name": "currentDate",
+        "label": "Date",
+        "type": "char",
+        "length": 12,
+        "direction": "display"
     },
     {
-        "name": "wifiRSSI",
-        "type": "int",
-        "value": 0,
-        "label": "WiFi Signal (dBm)"
+        "name": "weekday",
+        "label": "Weekday",
+        "type": "char",
+        "length": 10,
+        "direction": "display"
     },
     {
         "name": "ntpSynced",
-        "type": "int",
-        "value": 0,
-        "label": "NTP Synced (1=yes 0=no)"
+        "label": "NTP Synced",
+        "type": "bool",
+        "direction": "display"
     },
     {
-        "name": "recoveryMode",
-        "type": "int",
-        "value": 0,
-        "label": "Recovery Mode (1=yes 0=no)"
+        "type": "header",
+        "text": "Weather"
+    },
+    {
+        "name": "temperature",
+        "label": "Temperature (°C)",
+        "type": "float",
+        "direction": "display",
+        "digits": 1
+    },
+    {
+        "name": "weatherDesc",
+        "label": "Condition",
+        "type": "char",
+        "length": 32,
+        "direction": "display"
+    },
+    {
+        "name": "weatherCode",
+        "label": "OWM Code",
+        "type": "uint16_t",
+        "direction": "display"
+    },
+    {
+        "type": "header",
+        "text": "System"
+    },
+    {
+        "name": "freeHeap",
+        "label": "Free Heap (bytes)",
+        "type": "uint32_t",
+        "direction": "display"
+    },
+    {
+        "name": "uptime",
+        "label": "Uptime (s)",
+        "type": "uint32_t",
+        "direction": "display"
+    },
+    {
+        "name": "inRecovery",
+        "label": "Recovery Mode",
+        "type": "bool",
+        "direction": "display"
     }
 ]
