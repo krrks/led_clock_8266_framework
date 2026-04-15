@@ -1,31 +1,22 @@
-// main.cpp  –  ESP8266 LED Matrix Clock
-// Framework: maakbaas/esp8266-iot-framework
-// Board    : Wemos D1 Mini (ESP8266)
-// ─────────────────────────────────────────────────────────────────────────────
+// main.cpp — LED Matrix Clock
+// Wemos D1 Mini (ESP8266) + 32×8 WS2812B matrix
 //
-// Operating modes
-// ───────────────
-//  NORMAL MODE   WiFi connected  → NTP + weather + full clock face
-//                WiFi failed     → AP started, manual time via web config,
-//                                  retry WiFi every 1 hour
-//
-//  RECOVERY MODE Entered when:
-//                  • button held ≥ 1 s (boot window OR any time during normal)
-//                  • crash / watchdog reset detected at boot
-//                Shows scrolling "RECOVERY" text, activates web GUI (OTA,
-//                WiFi setup, config editor).  Exit by rebooting.
-//
-// Onboard LED (GPIO2, active LOW)
-// ────────────────────────────────
-//   Boot window / WiFi connecting  : fast blink (100 ms)
-//   Normal mode                    : OFF always
-//   Recovery mode                  : slow blink (1 s)
-//   OTA in progress                : solid ON  (handled by framework)
+// Changes in this version:
+//   • Default brightness 10% (25/255)
+//   • Default timezone HKT-8 (Hong Kong, UTC+8)
+//   • Adaptive refresh: 1 s active / 30 s idle
+//   • Web-socket activity resets idle timer
+//   • Runtime long-press → RTC flag → soft-restart into recovery
+//   • Recovery detection: crash/watchdog reset or RTC flag
 
 #include <Arduino.h>
-#include <LittleFS.h>
+#include "LittleFS.h"
+#include <FastLED.h>
+#include <ArduinoJson.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
+#include <time.h>
 
-// ── Framework headers ───────────────────────────────────────────────────────
 #include "WiFiManager.h"
 #include "webServer.h"
 #include "updater.h"
@@ -33,407 +24,449 @@
 #include "timeSync.h"
 #include "dashboard.h"
 
-// ── Project headers ─────────────────────────────────────────────────────────
 #include "PinDefinitions.h"
+#include "LEDMatrixLayout.h"
+#include "FontData.h"
 #include "ButtonHandler.h"
-#include "StatusLED.h"
-#include "TimeManager.h"
-#include "WeatherService.h"
-#include "DisplayManager.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Global instances
-// ─────────────────────────────────────────────────────────────────────────────
-static ButtonHandler    button(BUTTON_PIN);
-static StatusLED        statusLED(STATUS_LED_PIN, /*activeLow=*/true);
-static TimeManager      timeManager;
-static WeatherService   weather;
-static DisplayManager   display;
+// ─────────────────────────────────────────────────────
+// Compile-time constants
+// ─────────────────────────────────────────────────────
+#define DEFAULT_BRIGHTNESS  25          // ~10 % of 255
+#define BOOT_WINDOW_MS      3000UL      // window for long-press at boot
+#define LONG_PRESS_MS       1000UL      // 1 s = recovery trigger
+#define IDLE_TIMEOUT_MS     30000UL     // 30 s no activity → idle
+#define ACTIVE_REFRESH_MS   1000UL      // 1 s display update when active
+#define IDLE_REFRESH_MS     30000UL     // 30 s display update when idle
+#define SCROLL_FRAME_MS     80UL        // ~12 fps for recovery scroll
+#define NTP_INTERVAL_MS     3600000UL   // re-sync every 1 h
+#define WEATHER_INTERVAL_MS 3600000UL   // re-fetch every 1 h
+#define DASH_INTERVAL_MS    5000UL      // dashboard WebSocket cadence
+#define LED_BLINK_BOOT      100UL       // fast blink: boot window
+#define LED_BLINK_RECOVERY  1000UL      // slow blink: recovery mode
 
-// ─────────────────────────────────────────────────────────────────────────────
-// State flags
-// ─────────────────────────────────────────────────────────────────────────────
-static bool g_recovery     = false;
-static bool g_wifiOK       = false;  // true once STA is connected
-static bool g_ntpOK        = false;
+// RTC memory: survives soft-reset, cleared on power-on
+#define RTC_MAGIC 0xC10CFA11UL
+struct RTCData { uint32_t magic; bool enterRecovery; };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Simple non-blocking task helper
-// ─────────────────────────────────────────────────────────────────────────────
-struct Task {
-    unsigned long intervalMs;
-    unsigned long prevMs;
-    bool          enabled;
+// ─────────────────────────────────────────────────────
+// Globals
+// ─────────────────────────────────────────────────────
+CRGB        leds[NUM_LEDS];
+uint32_t    displayMatrix[MATRIX_HEIGHT][MATRIX_WIDTH];
+ButtonHandler button(BUTTON_PIN);
 
-    // Returns true and resets timer if interval has elapsed (or prevMs == 0).
-    bool due() {
-        if (!enabled) return false;
-        unsigned long now = millis();
-        if (prevMs == 0 || (now - prevMs) >= intervalMs) {
-            prevMs = now;
-            return true;
-        }
-        return false;
-    }
-    void arm()   { enabled = true;  prevMs = 0; }
-    void disarm(){ enabled = false; }
-};
+bool inRecovery      = false;
+bool ntpSynced       = false;
+bool longPressHandled = false;
 
-static Task taskDisplay   = {30000UL,      0, false}; // 30 s display refresh
-static Task taskSync      = {3600000UL,    0, false}; // 60 min NTP + weather
-static Task taskWifiRetry = {3600000UL,    0, false}; // 60 min WiFi retry
+// Weather
+int   weatherCode = 800;
+float weatherTemp = 25.0f;
+char  weatherDesc[32] = "Clear";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Forward declarations
-// ─────────────────────────────────────────────────────────────────────────────
-static void enterRecovery();
-static void initNormal();
-static void initRecovery();
-static void doSync();
-static void doDisplay();
-static void checkWifiConnected();  // polls for spontaneous (re)connection
+// Manual time fallback
+struct tm manualTm   = {};
+uint32_t  manualBase = 0;   // millis() at which manual time was set
 
-// ─────────────────────────────────────────────────────────────────────────────
-// setup()
-// ─────────────────────────────────────────────────────────────────────────────
-void setup() {
-    Serial.begin(115200);
-    Serial.println("\n\n[BOOT] ESP8266 LED Clock starting");
+// Timing
+unsigned long lastDisplayRefresh = 0;
+unsigned long lastNtpSync        = 0;
+unsigned long lastWeatherSync    = 0;
+unsigned long lastDashUpdate     = 0;
+unsigned long lastUserActivity   = 0;
+unsigned long lastLedBlink       = 0;
+bool          ledBlinkState      = false;
 
-    // Hardware init
-    statusLED.begin();
-    statusLED.setMode(StatusLED::FAST_BLINK);
+// ─────────────────────────────────────────────────────
+// Colour helpers
+// ─────────────────────────────────────────────────────
+static inline uint32_t rgb(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+}
 
-    button.begin();         // sets INPUT_PULLUP on BUTTON_PIN
-    display.begin();        // FastLED init; matrix blank
+const uint32_t C_WHITE  = rgb(255, 255, 255);
+const uint32_t C_ORANGE = rgb(255, 165,   0);
+const uint32_t C_CYAN   = rgb(  0, 255, 255);
 
-    // ── Crash detection ──────────────────────────────────────────────────────
-    String reason = ESP.getResetReason();
-    Serial.printf("[BOOT] Reset reason: %s\n", reason.c_str());
-    if (reason.indexOf("Exception") >= 0 ||
-        reason.indexOf("Wdt Reset") >= 0) {
-        Serial.println("[BOOT] Crash detected → recovery mode");
-        g_recovery = true;
-    }
+uint32_t weatherColor(int code) {
+    if (code >= 200 && code < 300) return rgb(128,   0, 128); // thunderstorm → purple
+    if (code >= 300 && code < 400) return rgb(  0, 128, 255); // drizzle      → sky blue
+    if (code >= 500 && code < 600) return rgb(  0,   0, 255); // rain         → blue
+    if (code >= 600 && code < 700) return rgb(200, 200, 255); // snow         → pale blue
+    if (code >= 700 && code < 800) return rgb(128, 128, 128); // mist/fog     → grey
+    if (code == 800)               return rgb(255, 220,   0); // clear sky    → gold
+    if (code  > 800)               return rgb(180, 180, 180); // clouds       → light grey
+    return C_WHITE;
+}
 
-    // ── 3-second boot window (skip on crash) ─────────────────────────────────
-    if (!g_recovery) {
-        Serial.println("[BOOT] 3-second boot window …");
-        unsigned long windowStart  = millis();
-        unsigned long btnHoldStart = 0;
-        bool          btnWasDown   = false;
+// ─────────────────────────────────────────────────────
+// Display helpers
+// ─────────────────────────────────────────────────────
+void clearDisplay() {
+    memset(displayMatrix, 0, sizeof(displayMatrix));
+}
 
-        while (millis() - windowStart < 3000) {
-            bool btnDown = (digitalRead(BUTTON_PIN) == LOW); // active LOW
-
-            if (btnDown) {
-                if (!btnWasDown) { btnHoldStart = millis(); btnWasDown = true; }
-                if (millis() - btnHoldStart >= 1000) {
-                    Serial.println("[BOOT] Long press → recovery mode");
-                    g_recovery = true;
-                    break;
-                }
-            } else {
-                btnWasDown = false;
-            }
-
-            statusLED.update();
-            delay(20);
+// Draw one character at column x; returns columns consumed (without inter-char gap)
+int drawChar(char c, int x, uint32_t color) {
+    const uint8_t* fd = getCharFontData(c);
+    uint8_t w = getCharWidth(c);
+    if (!fd) return w;
+    for (uint8_t col = 0; col < w; col++) {
+        int px = x + (int)col;
+        if (px < 0 || px >= MATRIX_WIDTH) continue;
+        uint8_t bits = fd[col];
+        for (uint8_t row = 0; row < DIGIT_HEIGHT; row++) {
+            if ((bits >> row) & 1)
+                displayMatrix[row][px] = color;
         }
     }
+    return w;
+}
 
-    // ── Framework + filesystem init ──────────────────────────────────────────
-    LittleFS.begin();
-    configManager.begin();
-    GUI.begin();
-    dash.begin(500);
+// Scrolling text (recovery mode)
+static int           scrollOff  = 0;
+static unsigned long lastScroll = 0;
 
-    // Apply stored brightness immediately
-    display.setBrightness(configManager.data.brightness);
+void drawScrollText(const char* txt, uint32_t color) {
+    clearDisplay();
 
-    // ── Branch to mode ───────────────────────────────────────────────────────
-    if (g_recovery) {
-        initRecovery();
-    } else {
-        initNormal();
+    // Total pixel-width of the string (chars + 1-px gaps)
+    int totalW = 0;
+    for (int i = 0; txt[i]; i++) totalW += getCharWidth(txt[i]) + 1;
+
+    int x = (int)MATRIX_WIDTH - scrollOff;
+    for (int i = 0; txt[i]; i++) {
+        x += drawChar(txt[i], x, color);
+        x++;
+    }
+
+    if (millis() - lastScroll >= SCROLL_FRAME_MS) {
+        lastScroll = millis();
+        if (++scrollOff >= totalW + (int)MATRIX_WIDTH)
+            scrollOff = 0;
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// HH:MM centred in 32 columns
+// Layout (5+1+5+1+1+1+5+1+5 = 25 px) with 3-4 px margins each side
+void drawTime(int hour, int minute, uint32_t color) {
+    int x = 3;                                              // left margin
+    x += drawChar('0' + hour   / 10, x, color); x++;       // H-tens + gap
+    x += drawChar('0' + hour   % 10, x, color); x++;       // H-units + gap
+    x += drawChar(':',               x, color); x++;       // colon + gap
+    x += drawChar('0' + minute / 10, x, color); x++;       // M-tens + gap
+         drawChar('0' + minute % 10, x, color);            // M-units
+}
+
+// Bottom info bars (row 7)
+//   cols  0-4  : week-of-month (white)
+//   cols  6-12 : weekday 1-7 (cyan weekdays / orange weekends)
+//   cols 14-17 : weather (colour-coded)
+void drawInfoBars(int mday, int wday) {
+    int weekOfMonth = (mday - 1) / 7 + 1;                  // 1-5
+    for (int i = 0; i < weekOfMonth && i < 5; i++)
+        displayMatrix[MATRIX_HEIGHT-1][i] = C_WHITE;
+
+    uint32_t wc = (wday >= 6) ? C_ORANGE : C_CYAN;
+    for (int i = 0; i < wday && i < 7; i++)
+        displayMatrix[MATRIX_HEIGHT-1][6 + i] = wc;
+
+    uint32_t wx = weatherColor(weatherCode);
+    for (int i = 0; i < 4; i++)
+        displayMatrix[MATRIX_HEIGHT-1][14 + i] = wx;
+}
+
+// Flush displayMatrix → FastLED buffer → hardware
+void flushDisplay() {
+    uint32_t buf[NUM_LEDS];
+    convertToSnakeOrder(displayMatrix, buf);
+    for (int i = 0; i < NUM_LEDS; i++) {
+        leds[i] = CRGB((buf[i] >> 16) & 0xFF,
+                       (buf[i] >>  8) & 0xFF,
+                        buf[i]        & 0xFF);
+    }
+    FastLED.show();
+}
+
+// ─────────────────────────────────────────────────────
+// Time helpers
+// ─────────────────────────────────────────────────────
+struct tm* getTime() {
+    if (ntpSynced) {
+        time_t now = time(nullptr);
+        return localtime(&now);
+    }
+    // Manual time + millis-drift
+    time_t t = mktime(&manualTm) + (long)((millis() - manualBase) / 1000UL);
+    return localtime(&t);
+}
+
+// ─────────────────────────────────────────────────────
+// Weather (plain HTTP, OpenWeatherMap free tier)
+// ─────────────────────────────────────────────────────
+void fetchWeather() {
+    if (WiFiManager.isCaptivePortal()) return;
+    if (strlen(configManager.data.weatherApiKey) < 8) return;
+
+    WiFiClient client;
+    HTTPClient http;
+
+    String url = F("http://api.openweathermap.org/data/2.5/weather?q=");
+    url += configManager.data.weatherCity;
+    url += F("&appid=");
+    url += configManager.data.weatherApiKey;
+    url += F("&units=metric");
+
+    if (http.begin(client, url)) {
+        int rc = http.GET();
+        if (rc == HTTP_CODE_OK) {
+            StaticJsonDocument<1024> doc;
+            if (!deserializeJson(doc, http.getStream())) {
+                weatherCode = doc["weather"][0]["id"] | 800;
+                weatherTemp = doc["main"]["temp"]     | 25.0f;
+                strlcpy(weatherDesc,
+                        doc["weather"][0]["description"] | "Unknown",
+                        sizeof(weatherDesc));
+                Serial.printf("Weather: code=%d %.1f°C %s\n",
+                              weatherCode, weatherTemp, weatherDesc);
+            }
+        }
+        http.end();
+    }
+}
+
+// ─────────────────────────────────────────────────────
+// Dashboard data update
+// ─────────────────────────────────────────────────────
+void updateDashboard() {
+    struct tm* t = getTime();
+    if (!t) return;
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d",
+             t->tm_hour, t->tm_min, t->tm_sec);
+    strlcpy(dash.data.currentTime, buf, sizeof(dash.data.currentTime));
+
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
+             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+    strlcpy(dash.data.currentDate, buf, sizeof(dash.data.currentDate));
+
+    static const char* wd[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    strlcpy(dash.data.weekday, wd[t->tm_wday], sizeof(dash.data.weekday));
+
+    dash.data.ntpSynced   = ntpSynced;
+    dash.data.temperature = weatherTemp;
+    dash.data.weatherCode = (uint16_t)weatherCode;
+    strlcpy(dash.data.weatherDesc, weatherDesc, sizeof(dash.data.weatherDesc));
+    dash.data.freeHeap   = ESP.getFreeHeap();
+    dash.data.uptime     = millis() / 1000UL;
+    dash.data.inRecovery = inRecovery;
+}
+
+// ─────────────────────────────────────────────────────
+// Status LED
+// ─────────────────────────────────────────────────────
+void blinkLed(unsigned long rateMs) {
+    if (millis() - lastLedBlink >= rateMs) {
+        lastLedBlink  = millis();
+        ledBlinkState = !ledBlinkState;
+        digitalWrite(STATUS_LED_PIN, ledBlinkState ? LOW : HIGH); // active-LOW
+    }
+}
+
+void updateStatusLed() {
+    if (inRecovery) {
+        blinkLed(LED_BLINK_RECOVERY);
+    } else {
+        digitalWrite(STATUS_LED_PIN, HIGH); // OFF in normal mode
+    }
+}
+
+// ─────────────────────────────────────────────────────
+// setup()
+// ─────────────────────────────────────────────────────
+void setup() {
+    Serial.begin(115200);
+    delay(100);
+
+    // ── Hardware init ──
+    pinMode(STATUS_LED_PIN, OUTPUT);
+    digitalWrite(STATUS_LED_PIN, LOW); // ON during boot
+
+    button.begin();
+    LittleFS.begin();
+    configManager.begin();
+
+    FastLED.addLeds<WS2812B, LED_MATRIX_PIN, GRB>(leds, NUM_LEDS);
+    uint8_t brightness = configManager.data.brightness;
+    FastLED.setBrightness(brightness > 0 ? brightness : DEFAULT_BRIGHTNESS);
+    FastLED.clear(true);
+
+    // Apply brightness immediately whenever config is saved from the web UI
+    configManager.setConfigSaveCallback([]() {
+        FastLED.setBrightness(configManager.data.brightness);
+        lastUserActivity = millis();
+    });
+
+    // ── Recovery detection: crash / watchdog reset ──
+    String reason = ESP.getResetReason();
+    bool crashReset = (reason == "Exception" ||
+                       reason.indexOf("Watchdog") >= 0);
+
+    // ── Recovery detection: RTC flag from runtime long-press + restart ──
+    RTCData rtc = {};
+    bool rtcRecovery = false;
+    if (ESP.rtcUserMemoryRead(0, (uint32_t*)&rtc, sizeof(rtc))) {
+        if (rtc.magic == RTC_MAGIC && rtc.enterRecovery) {
+            rtcRecovery = true;
+            rtc.enterRecovery = false;
+            ESP.rtcUserMemoryWrite(0, (uint32_t*)&rtc, sizeof(rtc));
+        }
+    }
+
+    // ── Boot window: 3 s, watch for long press ──
+    bool bootLongPress = false;
+    unsigned long bootStart = millis();
+    while (millis() - bootStart < BOOT_WINDOW_MS) {
+        button.update();
+        if (button.isPressed() && button.getPressDuration() >= LONG_PRESS_MS) {
+            bootLongPress = true;
+            break;
+        }
+        blinkLed(LED_BLINK_BOOT);
+        delay(10);
+        yield();
+    }
+
+    inRecovery = crashReset || rtcRecovery || bootLongPress;
+    if (inRecovery) {
+        Serial.printf("Recovery (crash=%d rtc=%d btn=%d reason=%s)\n",
+                      crashReset, rtcRecovery, bootLongPress, reason.c_str());
+    }
+
+    // ── Framework init ──
+    GUI.begin();
+    dash.begin(DASH_INTERVAL_MS);
+
+    const char* apName = inRecovery ? "LED-CLOCK"
+                                    : configManager.data.projectName;
+    WiFiManager.begin(apName, 15000);
+
+    // ── NTP + timezone (normal mode only) ──
+    if (!inRecovery) {
+        const char* tz = (strlen(configManager.data.timezone) > 0)
+                         ? configManager.data.timezone
+                         : "HKT-8";
+        timeSync.begin(tz);
+
+        if (timeSync.waitForSyncResult(10000) == 0) {
+            ntpSynced = true;
+            Serial.println("NTP synced");
+        } else {
+            // Manual time fallback with millis drift
+            memset(&manualTm, 0, sizeof(manualTm));
+            manualTm.tm_hour  = configManager.data.manualHour;
+            manualTm.tm_min   = configManager.data.manualMinute;
+            manualTm.tm_mday  = configManager.data.manualDay;
+            manualTm.tm_mon   = configManager.data.manualMonth - 1;
+            manualTm.tm_year  = configManager.data.manualYear - 1900;
+            manualTm.tm_isdst = -1;
+            mktime(&manualTm);  // normalise
+            manualBase = millis();
+            Serial.println("NTP timeout — using manual time");
+        }
+
+        fetchWeather();
+    }
+
+    lastUserActivity   = millis();
+    lastNtpSync        = millis();
+    lastWeatherSync    = millis();
+    lastDisplayRefresh = 0; // force immediate first draw
+
+    digitalWrite(STATUS_LED_PIN, HIGH); // LED off after boot
+    Serial.println("Setup complete");
+}
+
+// ─────────────────────────────────────────────────────
 // loop()
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────
 void loop() {
-    // ── Framework services (both modes) ─────────────────────────────────────
+    // ── Framework services ──
     WiFiManager.loop();
     updater.loop();
     configManager.loop();
     dash.loop();
-    statusLED.update();
 
-    // ── Button handling ──────────────────────────────────────────────────────
+    unsigned long now = millis();
+
+    // ── Button (polled — avoids ButtonHandler static-variable bug) ──
     button.update();
 
-    // Long-press detection using isPressed() + getPressDuration()
-    // This avoids the static-variable bug in ButtonHandler::processStateMachine()
-    // where longPressTriggered never resets between presses.
-    {
-        static bool longHandled = false;
-        if (button.isPressed()) {
-            if (!longHandled && button.getPressDuration() >= 1000) {
-                longHandled = true;
-                if (!g_recovery) {
-                    Serial.println("[BTN] Long press → entering recovery");
-                    enterRecovery();
-                }
+    if (button.isPressed()) {
+        lastUserActivity = now;
+
+        // Long press in normal mode → signal recovery via RTC + restart
+        if (!inRecovery && !longPressHandled
+            && button.getPressDuration() >= LONG_PRESS_MS)
+        {
+            longPressHandled = true;
+            RTCData rtc = { RTC_MAGIC, true };
+            ESP.rtcUserMemoryWrite(0, (uint32_t*)&rtc, sizeof(rtc));
+            delay(50);
+            ESP.restart();
+        }
+    } else {
+        longPressHandled = false;
+    }
+
+    // ── Web activity: any open WebSocket client = someone is watching ──
+    if (GUI.ws.count() > 0) lastUserActivity = now;
+
+    // ── Idle detection ──
+    bool isIdle = (now - lastUserActivity > IDLE_TIMEOUT_MS);
+
+    // ── Display refresh ──
+    if (inRecovery) {
+        // Non-blocking scroll at SCROLL_FRAME_MS rate
+        drawScrollText("RECOVERY", C_ORANGE);
+        flushDisplay();
+    } else {
+        unsigned long interval = isIdle ? IDLE_REFRESH_MS : ACTIVE_REFRESH_MS;
+        if (now - lastDisplayRefresh >= interval) {
+            lastDisplayRefresh = now;
+            clearDisplay();
+            struct tm* t = getTime();
+            if (t) {
+                drawTime(t->tm_hour, t->tm_min, C_WHITE);
+                int wday = (t->tm_wday == 0) ? 7 : t->tm_wday; // 0=Sun → 7
+                drawInfoBars(t->tm_mday, wday);
             }
-        } else {
-            longHandled = false;
+            flushDisplay();
         }
     }
 
-    // Normal button events (only in normal mode)
-    if (!g_recovery) {
-        ButtonEvent ev = button.getEvent();
-
-        if (ev == BE_CLICK) {
-            // Cycle brightness 0→1→2→0
-            uint8_t b = (configManager.data.brightness + 1) % 3;
-            configManager.data.brightness = b;
-            configManager.save();
-            display.setBrightness(b);
-            Serial.printf("[BTN] Brightness → %d\n", b);
-
-        } else if (ev == BE_DOUBLE_CLICK) {
-            // Force immediate NTP + weather sync
-            Serial.println("[BTN] Double-click → force sync");
-            taskSync.arm();
-
-        } else if (ev == BE_VERY_LONG_PRESS) {
-            Serial.println("[BTN] Very-long press → reboot");
-            ESP.restart();
-        }
-    } else {
-        // Recovery mode: very long press reboots
-        if (button.getEvent() == BE_VERY_LONG_PRESS) {
-            Serial.println("[BTN] Very-long press in recovery → reboot");
-            ESP.restart();
-        }
+    // ── Dashboard data (separate from web send rate) ──
+    if (now - lastDashUpdate >= DASH_INTERVAL_MS) {
+        lastDashUpdate = now;
+        updateDashboard();
     }
 
-    // ── Recovery mode tasks ──────────────────────────────────────────────────
-    if (g_recovery) {
-        display.scrollTick();
-        dash.data.recoveryMode = 1;
-        return; // skip all normal-mode tasks
+    // ── Periodic NTP re-sync ──
+    if (!inRecovery && now - lastNtpSync >= NTP_INTERVAL_MS) {
+        lastNtpSync = now;
+        if (timeSync.waitForSyncResult(5000) == 0) ntpSynced = true;
     }
 
-    // ── Normal mode: detect if WiFi has (re)connected spontaneously ──────────
-    checkWifiConnected();
-
-    // ── Manual time update: detect config changes in the browser ─────────────
-    if (!g_ntpOK) {
-        if (timeManager.manualTimeChanged(
-                configManager.data.manualYear,
-                configManager.data.manualMonth,
-                configManager.data.manualDay,
-                configManager.data.manualHour,
-                configManager.data.manualMinute,
-                configManager.data.manualWeekday)) {
-            Serial.println("[TIME] Manual time config changed – applying");
-            timeManager.setManualTime(
-                configManager.data.manualYear,
-                configManager.data.manualMonth,
-                configManager.data.manualDay,
-                configManager.data.manualHour,
-                configManager.data.manualMinute,
-                configManager.data.manualWeekday);
-        }
+    // ── Periodic weather re-fetch ──
+    if (!inRecovery && now - lastWeatherSync >= WEATHER_INTERVAL_MS) {
+        lastWeatherSync = now;
+        fetchWeather();
     }
 
-    // ── WiFi retry task (normal mode, no WiFi) ───────────────────────────────
-    if (!g_wifiOK && taskWifiRetry.due()) {
-        Serial.println("[WIFI] 1-hour retry …");
-        WiFi.reconnect();
-        unsigned long t0 = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) {
-            WiFiManager.loop();
-            updater.loop();
-            statusLED.update();
-            yield();
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("[WIFI] Retry succeeded");
-            g_wifiOK = true;
-            statusLED.setMode(StatusLED::OFF);
-            timeSync.begin(configManager.data.timezone);
-            taskSync.arm();
-            taskWifiRetry.disarm();
-        } else {
-            Serial.println("[WIFI] Retry failed – will try again in 1 hour");
-        }
-    }
+    // ── Status LED ──
+    updateStatusLed();
 
-    // ── Display refresh task (30 s) ──────────────────────────────────────────
-    if (taskDisplay.due()) {
-        doDisplay();
-    }
-
-    // ── NTP + weather sync task (60 min, WiFi only) ──────────────────────────
-    if (g_wifiOK && taskSync.due()) {
-        doSync();
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// initNormal()  –  called from setup() when not entering recovery
-// ─────────────────────────────────────────────────────────────────────────────
-static void initNormal() {
-    Serial.println("[INIT] Normal mode – connecting WiFi …");
-    statusLED.setMode(StatusLED::FAST_BLINK);
-
-    // 15-second WiFi attempt; if it fails WiFiManager starts its captive AP
-    WiFiManager.begin(configManager.data.projectName, 15000);
-
-    g_wifiOK = (WiFiManager.SSID().length() > 0);
-
-    if (g_wifiOK) {
-        Serial.printf("[WIFI] Connected to: %s\n",
-                      WiFiManager.SSID().c_str());
-        statusLED.setMode(StatusLED::OFF);
-        timeSync.begin(configManager.data.timezone);
-        taskSync.arm();     // sync NTP + weather immediately
-        taskWifiRetry.disarm();
-    } else {
-        Serial.println("[WIFI] Failed – starting AP, using manual time");
-        statusLED.setMode(StatusLED::OFF); // LED stays OFF in normal mode
-
-        // Seed manual time from last-saved config values
-        timeManager.setManualTime(
-            configManager.data.manualYear,
-            configManager.data.manualMonth,
-            configManager.data.manualDay,
-            configManager.data.manualHour,
-            configManager.data.manualMinute,
-            configManager.data.manualWeekday);
-
-        taskSync.disarm();
-        taskWifiRetry.arm(); // retry WiFi every hour
-    }
-
-    weather.begin();
-    taskDisplay.arm(); // render first frame immediately
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// initRecovery()  –  called from setup() on crash or boot-window press
-// ─────────────────────────────────────────────────────────────────────────────
-static void initRecovery() {
-    Serial.println("[INIT] Recovery mode");
-    g_recovery = true;
-    statusLED.setMode(StatusLED::SLOW_BLINK);
-
-    // Try stored WiFi with shorter timeout; fall through to AP on failure
-    WiFiManager.begin(configManager.data.projectName, 10000);
-
-    display.showRecovery();
-
-    taskDisplay.disarm();
-    taskSync.disarm();
-    taskWifiRetry.disarm();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// enterRecovery()  –  called at runtime (long press or error threshold)
-// ─────────────────────────────────────────────────────────────────────────────
-static void enterRecovery() {
-    g_recovery = true;
-    statusLED.setMode(StatusLED::SLOW_BLINK);
-    display.showRecovery();
-
-    taskDisplay.disarm();
-    taskSync.disarm();
-    taskWifiRetry.disarm();
-
-    // If STA is already connected, the web GUI remains accessible on local IP.
-    // If not, WiFiManager should already have an AP running; if not, start one.
-    if (!g_wifiOK) {
-        WiFiManager.begin(configManager.data.projectName, 5000);
-    }
-
-    Serial.println("[RECOVERY] Active – reboot to exit");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// doSync()  –  NTP check + weather fetch (runs every 60 min when WiFi OK)
-// ─────────────────────────────────────────────────────────────────────────────
-static void doSync() {
-    Serial.println("[SYNC] Starting");
-
-    // ── NTP ──────────────────────────────────────────────────────────────────
-    if (!timeSync.isSynced()) {
-        Serial.println("[NTP] Waiting for sync …");
-        timeSync.waitForSyncResult(10000);
-    }
-    g_ntpOK = timeSync.isSynced();
-    Serial.printf("[NTP] %s\n", g_ntpOK ? "OK" : "not synced");
-
-    // ── Weather ───────────────────────────────────────────────────────────────
-    if (strlen(configManager.data.owmApiKey) == 0) {
-        Serial.println("[WEATHER] No API key configured – skipping");
-        return;
-    }
-
-    bool ok = weather.fetch(configManager.data.city, configManager.data.owmApiKey);
-    if (ok) {
-        weather.resetFailCount();
-    } else {
-        weather.incrementFailCount();
-        Serial.printf("[WEATHER] Fail count: %d / %d\n",
-                      weather.getFailCount(), WEATHER_FAIL_LIMIT);
-        if (weather.getFailCount() >= WEATHER_FAIL_LIMIT) {
-            Serial.println("[WEATHER] Too many failures → recovery");
-            enterRecovery();
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// doDisplay()  –  render the clock face (runs every 30 s)
-// ─────────────────────────────────────────────────────────────────────────────
-static void doDisplay() {
-    int hour, minute, second;
-    int year, month, day, weekday;
-
-    timeManager.getTimeComponents(hour, minute, second);
-    timeManager.getDateComponents(year, month, day, weekday);
-
-    uint32_t wxColor = weather.getConditionColor();
-
-    display.render(hour, minute, weekday, day, wxColor);
-
-    // ── Update live dashboard ─────────────────────────────────────────────────
-    char buf[6];
-    snprintf(buf, sizeof(buf), "%02d:%02d", hour, minute);
-    strncpy(dash.data.currentTime, buf, sizeof(dash.data.currentTime));
-
-    dash.data.weatherCode  = weather.getConditionCode();
-    dash.data.wifiRSSI     = g_wifiOK ? (int)WiFi.RSSI() : 0;
-    dash.data.ntpSynced    = g_ntpOK ? 1 : 0;
-    dash.data.recoveryMode = 0;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// checkWifiConnected()  –  detect spontaneous STA connection
-// (e.g. user configured new WiFi through captive portal)
-// ─────────────────────────────────────────────────────────────────────────────
-static void checkWifiConnected() {
-    if (g_wifiOK) return;                         // already connected
-    if (WiFi.status() != WL_CONNECTED) return;    // not yet
-
-    Serial.println("[WIFI] Spontaneous connection detected");
-    g_wifiOK = true;
-    statusLED.setMode(StatusLED::OFF);
-    timeSync.begin(configManager.data.timezone);
-    taskSync.arm();
-    taskWifiRetry.disarm();
+    yield(); // let ESP8266 background tasks run
 }

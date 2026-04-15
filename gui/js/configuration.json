@@ -1,72 +1,117 @@
 [
     {
         "name": "projectName",
+        "label": "Project Name",
         "type": "char",
         "length": 32,
-        "value": "LED-CLOCK",
-        "label": "Device / AP Name"
+        "value": "LED Clock"
     },
     {
-        "name": "city",
+        "name": "language",
         "type": "char",
-        "length": 32,
-        "value": "London",
-        "label": "City for Weather"
+        "length": 3,
+        "value": "en",
+        "hidden": true
     },
     {
-        "name": "owmApiKey",
-        "type": "char",
-        "length": 48,
-        "value": "",
-        "label": "OpenWeatherMap API Key"
-    },
-    {
-        "name": "timezone",
-        "type": "char",
-        "length": 48,
-        "value": "UTC0",
-        "label": "Timezone (POSIX, e.g. CET-1CEST,M3.5.0,M10.5.0/3)"
+        "type": "header",
+        "text": "Display"
     },
     {
         "name": "brightness",
+        "label": "Brightness",
         "type": "uint8_t",
-        "value": 1,
-        "label": "Brightness  0=dim  1=medium  2=full"
+        "min": 0,
+        "max": 255,
+        "step": 1,
+        "control": "slider",
+        "value": 25
+    },
+    {
+        "name": "use24h",
+        "label": "24-Hour Format",
+        "type": "bool",
+        "value": true
+    },
+    {
+        "type": "header",
+        "text": "Time & Timezone"
+    },
+    {
+        "name": "timezone",
+        "label": "Timezone (POSIX TZ string)",
+        "type": "char",
+        "length": 32,
+        "value": "HKT-8"
+    },
+    {
+        "type": "header",
+        "text": "Weather (OpenWeatherMap)"
+    },
+    {
+        "name": "weatherApiKey",
+        "label": "API Key",
+        "type": "char",
+        "length": 33,
+        "value": ""
+    },
+    {
+        "name": "weatherCity",
+        "label": "City",
+        "type": "char",
+        "length": 32,
+        "value": "Hong Kong"
+    },
+    {
+        "type": "header",
+        "text": "Manual Time Fallback (used when NTP unavailable)"
     },
     {
         "name": "manualHour",
+        "label": "Hour (0-23)",
         "type": "uint8_t",
-        "value": 12,
-        "label": "Manual Hour (0-23)"
+        "min": 0,
+        "max": 23,
+        "value": 12
     },
     {
         "name": "manualMinute",
+        "label": "Minute (0-59)",
         "type": "uint8_t",
-        "value": 0,
-        "label": "Manual Minute (0-59)"
+        "min": 0,
+        "max": 59,
+        "value": 0
     },
     {
         "name": "manualDay",
+        "label": "Day (1-31)",
         "type": "uint8_t",
-        "value": 1,
-        "label": "Manual Day (1-31)"
+        "min": 1,
+        "max": 31,
+        "value": 1
     },
     {
         "name": "manualMonth",
+        "label": "Month (1-12)",
         "type": "uint8_t",
-        "value": 1,
-        "label": "Manual Month (1-12)"
+        "min": 1,
+        "max": 12,
+        "value": 1
     },
     {
         "name": "manualYear",
-        "type": "int",
-        "value": 2025,
-        "label": "Manual Year"
+        "label": "Year",
+        "type": "uint16_t",
+        "min": 2024,
+        "max": 2099,
+        "value": 2025
     },
     {
         "name": "manualWeekday",
+        "label": "Weekday (1=Mon … 7=Sun)",
         "type": "uint8_t",
-        "value": 1,
-        "label": "Manual Weekday  1=Mon  7=Sun"
+        "min": 1,
+        "max": 7,
+        "value": 1
     }
 ]
