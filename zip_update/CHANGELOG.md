@@ -1,15 +1,13 @@
-#! internal metadata line — ignored by release notes
+#! internal metadata — ignored by release notes
 
-Patch 001 — Multi-fix update
+Patch 002 — Fix compile errors + IoT Framework as library
 
-- Fix: LED matrix left-right mirror corrected in LEDMatrixLayout.h
-- Fix: Web UI page-switching (BrowserRouter → HashRouter)
-- Feat: Configuration page now shows all clock settings (brightness, timezone, weather, manual time)
-- Feat: Dashboard page now shows live time, date, NTP status, weather and system metrics
-- Feat: Default brightness set to 10% (~25/255)
-- Feat: Default timezone set to HKT-8 (Hong Kong, UTC+8)
-- Feat: Adaptive display refresh — 1 s when active, 30 s when idle (30 s no interaction)
-- Feat: Web-socket client presence resets idle timer
-- Feat: Runtime long-press triggers soft-restart into recovery via RTC memory flag
-- Chore: platformio env renamed nodemcuv2 → d1_mini to match CI workflow
-- Chore: FastLED added to lib_deps
+- Fix: platformio.ini now declares esp8266-iot-framework as lib_dep
+- Fix: removed extra_scripts (framework handles preBuild itself)
+- Fix: added CONFIG_PATH / DASHBOARD_PATH build flags so project JSON
+       files are copied into the framework before code-gen runs
+- Fix: RTCData struct uses two uint32_t members (sizeof=8, multiple-of-4
+       required by ESP.rtcUserMemoryRead/Write API)
+- Fix: all implicit narrowing casts made explicit; static functions
+       properly scoped; CRGB fields assigned by member (r/g/b)
+- Feat: FastLED added to lib_deps
