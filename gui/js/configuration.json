@@ -21,17 +21,32 @@
         "name": "brightness",
         "label": "Brightness",
         "type": "uint8_t",
-        "min": 0,
-        "max": 255,
-        "step": 1,
-        "control": "slider",
-        "value": 25
+        "control": "select",
+        "options": [0, 1, 2],
+        "optionLabels": ["Dim (very dark)", "Medium", "Bright"],
+        "value": 1
     },
     {
         "name": "use24h",
         "label": "24-Hour Format",
         "type": "bool",
         "value": true
+    },
+    {
+        "name": "displayOrientation",
+        "label": "Display Orientation",
+        "type": "uint8_t",
+        "control": "select",
+        "options": [0, 1, 2, 3, 4, 5],
+        "optionLabels": [
+            "Normal",
+            "90 deg CW",
+            "180 deg (upside-down)",
+            "270 deg CW",
+            "H-Flip (mirror left-right)",
+            "V-Flip (mirror top-bottom)"
+        ],
+        "value": 0
     },
     {
         "type": "header",
@@ -108,7 +123,7 @@
     },
     {
         "name": "manualWeekday",
-        "label": "Weekday (1=Mon … 7=Sun)",
+        "label": "Weekday (1=Mon ... 7=Sun)",
         "type": "uint8_t",
         "min": 1,
         "max": 7,
