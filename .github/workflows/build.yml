@@ -1,5 +1,8 @@
 name: Build & Release Firmware
 
+# ════════════════════════════════════════════════════════════════════
+# Trigger conditions
+# ════════════════════════════════════════════════════════════════════
 on:
   push:
     branches: [ '**' ]
@@ -14,7 +17,7 @@ on:
         type: boolean
 
 # ════════════════════════════════════════════════════════════════════
-# Job 1: Check & Decision
+# Job 1: Pre-flight Check
 # ════════════════════════════════════════════════════════════════════
 jobs:
   check:
@@ -98,7 +101,7 @@ jobs:
           rm -rf _patch_tmp
           echo "✅ Patch extracted"
 
-      - name: Run apply.sh
+      - name: Run apply.sh (optional post-patch hook)
         run: |
           if [ -f "zip_update/patches/apply.sh" ]; then
             echo "Running apply.sh..."
@@ -112,8 +115,11 @@ jobs:
       - name: Commit patch results
         run: |
           PATCH_NAME=$(basename "${{ needs.check.outputs.patch_path }}" .zip)
+
+          # Remove the consumed patch (and any leftover scripts)
           rm -f zip_update/patches/*.zip zip_update/patches/apply.sh
 
+          # Append to applied log (keep last 50 entries)
           echo "$PATCH_NAME" >> zip_update/applied_patches.txt
           tail -n 50 zip_update/applied_patches.txt > /tmp/ap.txt \
             && mv /tmp/ap.txt zip_update/applied_patches.txt
@@ -123,8 +129,10 @@ jobs:
           git add -A
 
           if ! git diff --cached --quiet; then
-            NOTE=$(grep -v '^#!' zip_update/CHANGELOG.md 2>/dev/null | head -80 || echo "")
-            git commit -m "chore: apply patch $PATCH_NAME [skip ci] $NOTE"
+            NOTE=$(grep -v '^#' zip_update/CHANGELOG.md 2>/dev/null | head -80 || echo "")
+            git commit -m "chore: apply patch $PATCH_NAME [skip ci]
+
+$NOTE"
             git push origin HEAD
             echo "✅ Committed and pushed"
           else
@@ -133,7 +141,18 @@ jobs:
 
 # ════════════════════════════════════════════════════════════════════
 # Job 3: Build Firmware
-# Runs whether apply-patch succeeded OR was skipped (no patch found)
+#
+# Cache layers (fast → slow to rebuild):
+#   A) pip              ~/.cache/pip
+#   B) pio toolchain    ~/.platformio/.packages + .tools   (~300 MB, rarely changes)
+#   C) pio libraries    ~/.platformio/lib                  (framework + its node_modules)
+#
+# Why node_modules lives in the lib cache:
+#   The ESP8266 IoT Framework ships a React/Webpack GUI. Its preBuildHTML.py
+#   calls `npm ci` only when node_modules is ABSENT. We run `npm install`
+#   (no package-lock.json required) right after pio installs the library,
+#   before `pio run` triggers preBuildHTML.py. On cache-hit the lib/ folder
+#   already contains node_modules → preBuildHTML.py skips npm entirely.
 # ════════════════════════════════════════════════════════════════════
   build:
     name: Build Firmware
@@ -147,7 +166,8 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout code (after patch commit)
+      # ── Source ────────────────────────────────────────────────────
+      - name: Checkout code (post-patch)
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -157,40 +177,86 @@ jobs:
       - name: Pull latest (picks up patch commit if any)
         run: git pull --rebase origin ${{ github.ref_name }} || true
 
+      # ── Python / pip ──────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Cache PlatformIO
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: Install PlatformIO + Python deps
+        run: pip install --upgrade pip platformio asn1crypto
+
+      # ── PlatformIO toolchain (compiler, SDK) ──────────────────────
+      - name: Cache PlatformIO toolchain
         uses: actions/cache@v4
         with:
           path: |
-            ~/.platformio
-            ~/.cache/pip
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-${{ runner.os }}-
+            ~/.platformio/.packages
+            ~/.platformio/.tools
+          key: pio-toolchain-${{ runner.os }}-espressif8266@3.0.0
+          restore-keys: pio-toolchain-${{ runner.os }}-
 
-      - name: Install PlatformIO
-        run: pip install --upgrade pip platformio
+      # ── PlatformIO libraries (framework + deps) ───────────────────
+      - name: Cache PlatformIO libraries (includes framework node_modules)
+        id: pio_lib_cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio/lib
+          # Key: platformio.ini controls which libs are installed;
+          # JSON files control whether REBUILD_HTML/CONFIG/DASHBOARD regenerates.
+          key: pio-lib-${{ runner.os }}-${{ hashFiles('platformio.ini', 'gui/js/configuration.json', 'gui/js/dashboard.json') }}
+          restore-keys: |
+            pio-lib-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+            pio-lib-${{ runner.os }}-
 
-      - name: Set up Node.js 18 (for GUI webpack)
+      # ── Install libraries (fast when cache hits) ──────────────────
+      - name: Install PlatformIO platform & libraries
+        run: pio pkg install --environment d1_mini
+
+      # ── Node.js / npm ─────────────────────────────────────────────
+      - name: Set up Node.js 18
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
-      - name: Install GUI JS dependencies
+      - name: Install npm deps in framework (pre-empts preBuildHTML npm ci)
+        # The ESP8266 IoT Framework's preBuildHTML.py checks:
+        #   if not os.path.isdir("../node_modules"): call("npm ci ...")
+        # Since package-lock.json is gitignored we cannot use `npm ci`.
+        # We run `npm install` (no lock file needed) which populates
+        # node_modules; preBuildHTML.py then skips npm entirely.
         run: |
-          pio pkg install --environment d1_mini --silent 2>/dev/null || true
-          FW_DIR=$(find ~/.platformio -type d -name "*ESP8266 IoT Framework*" 2>/dev/null | head -1 || echo "")
-          if [ -n "$FW_DIR" ] && [ -f "$FW_DIR/package.json" ]; then
-            echo "Installing JS deps in $FW_DIR"
-            (cd "$FW_DIR" && npm ci --legacy-peer-deps)
+          FW_DIR=$(find ~/.platformio/lib -maxdepth 3 -name "package.json" \
+                   ! -path "*/node_modules/*" 2>/dev/null | head -1 | xargs -r dirname)
+
+          if [ -z "$FW_DIR" ]; then
+            echo "⚠️  Framework package.json not found — skipping npm pre-install"
+            exit 0
           fi
 
-      - name: Build Firmware (d1_mini)
+          echo "Framework: $FW_DIR"
+
+          if [ -d "$FW_DIR/node_modules" ]; then
+            echo "✅ node_modules already present (cache hit) — skipping npm install"
+          else
+            echo "📦 Running npm install --legacy-peer-deps in $FW_DIR"
+            cd "$FW_DIR"
+            npm install --legacy-peer-deps
+            echo "✅ npm install complete"
+          fi
+
+      # ── Firmware build ────────────────────────────────────────────
+      - name: Build firmware (d1_mini)
         run: pio run -e d1_mini
 
+      # ── Artifact ──────────────────────────────────────────────────
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
@@ -198,14 +264,15 @@ jobs:
           path: .pio/build/d1_mini/firmware.bin
           retention-days: 30
 
-      # Only cut a release on main branch pushes
+      # ── Release (main branch only) ────────────────────────────────
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v$(date +%Y.%m%d.%H%M)"
-          BODY=$(grep -v '^#!' zip_update/CHANGELOG.md 2>/dev/null || echo "Automated firmware build")
+          BODY=$(grep -v '^#' zip_update/CHANGELOG.md 2>/dev/null \
+                 || echo "Automated firmware build")
           gh release create "$TAG" \
             --title "Firmware $TAG" \
             --notes "$BODY" \
@@ -261,8 +328,10 @@ jobs:
           KEEP:     "15"
         run: |
           echo "── Cleaning up old workflow runs ─────────────────────────"
-          for WF_ID in $(gh api "repos/$REPO/actions/workflows" --paginate --jq '.workflows[].id' 2>/dev/null); do
-            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" --jq '.name' 2>/dev/null || echo "id=$WF_ID")
+          for WF_ID in $(gh api "repos/$REPO/actions/workflows" \
+                         --paginate --jq '.workflows[].id' 2>/dev/null); do
+            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" \
+                      --jq '.name' 2>/dev/null || echo "id=$WF_ID")
             RUN_IDS=$(gh api "repos/$REPO/actions/workflows/$WF_ID/runs" \
                         --paginate --jq '.workflow_runs[].id' 2>/dev/null | head -200)
             TOTAL=$(echo "$RUN_IDS" | grep -c . 2>/dev/null || echo 0)
