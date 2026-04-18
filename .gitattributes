@@ -1,0 +1,5 @@
+# Language stats
+*.h linguist-language=C++
+
+# Treat zip patches as binary so git never rewrites bytes
+*.zip binary
