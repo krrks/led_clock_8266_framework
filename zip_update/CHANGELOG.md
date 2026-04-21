@@ -1,22 +1,22 @@
 #!build
-## v1.2.0 — Serial output, full button actions, display orientation
+## v1.003 — Weather 401 fix
 
-### New features
-- **Serial monitor**: boot banner with firmware version, chip ID, SDK, flash size, heap, reset reason
-- **Serial monitor**: periodic heartbeat every 60 s (time, heap, NTP status, weather code, orientation)
-- **Serial monitor**: all button events, config saves, WiFi/NTP/weather transitions logged
-- **Button single-click**: cycle brightness Dim → Medium → Bright → Dim (saves to EEPROM)
-- **Button double-click**: force immediate NTP re-sync + weather fetch
-- **Button 5 s hold**: reboot device
-- **Display orientation**: new config dropdown — Normal / 90° CW / 180° / 270° CW / H-Flip / V-Flip
-- **Brightness**: changed from 0-255 raw slider to 3-level select (Dim=10 / Medium=60 / Bright=180)
-- **README**: serial output examples, orientation table, AI patch workflow rules
-- **.gitattributes**: added `*.zip binary` to prevent git corrupting patch zips
-
-### Breaking changes
-- Brightness config field semantics changed (0-255 raw → 0/1/2 level index).
-  EEPROM auto-resets to defaults on first boot after flashing — this is normal.
+### Fix
+- `fetchWeather()` now distinguishes HTTP 401/400/404 (API key / city
+  config errors) from genuine network failures.
+  - **401**: logs a clear multi-line message pointing to the web UI
+    Configuration page; does NOT count toward the recovery-trigger
+    fail counter.  Previously a bad key would silently accumulate
+    failures and could eventually force recovery mode.
+  - **400**: logs "bad request — check city name".
+  - **404**: logs "city not found".
+  - Other HTTP errors / timeouts still increment the fail counter
+    and trigger recovery after WEATHER_FAIL_LIMIT (5) consecutive hits.
+- `weatherFailCount` global tracks *network* failures only; reset to 0
+  on every successful fetch.
 
 ### Notes
-- 90°/270° apply a scaled transform to fill the 32×8 non-square display
-- `displayOrientation` is a new uint8_t in the config struct — triggers EEPROM reset
+- A 401 from OpenWeatherMap means either the API key has not been
+  entered yet, or a newly-created key hasn't activated (can take up
+  to 2 hours on a free account).  Enter / re-enter the key in the
+  web UI under **Configuration → API Key** and save.
