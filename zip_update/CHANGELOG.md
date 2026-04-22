@@ -1,22 +1,34 @@
 #!build
-## v1.003 — Weather 401 fix
+## v1.004 — 亮度 & 旋转重启后失效修复
 
-### Fix
-- `fetchWeather()` now distinguishes HTTP 401/400/404 (API key / city
-  config errors) from genuine network failures.
-  - **401**: logs a clear multi-line message pointing to the web UI
-    Configuration page; does NOT count toward the recovery-trigger
-    fail counter.  Previously a bad key would silently accumulate
-    failures and could eventually force recovery mode.
-  - **400**: logs "bad request — check city name".
-  - **404**: logs "city not found".
-  - Other HTTP errors / timeouts still increment the fail counter
-    and trigger recovery after WEATHER_FAIL_LIMIT (5) consecutive hits.
-- `weatherFailCount` global tracks *network* failures only; reset to 0
-  on every successful fetch.
+### 问题根因
 
-### Notes
-- A 401 from OpenWeatherMap means either the API key has not been
-  entered yet, or a newly-created key hasn't activated (can take up
-  to 2 hours on a free account).  Enter / re-enter the key in the
-  web UI under **Configuration → API Key** and save.
+两个独立 bug 叠加，导致"重启后配置消失"的现象：
+
+1. **亮度映射错误**
+   - `brightness` 字段在配置 JSON 中是下拉选择，存储的是选项索引 `0 / 1 / 2`（对应 Dim / Medium / Bright）。
+   - 旧代码：`FastLED.setBrightness(configManager.data.brightness)` 直接把索引值 1 或 2 传给 FastLED，亮度几乎为 0，视觉上等同于"消失"。
+   - 新代码：通过 `BRIGHTNESS_MAP[3] = {25, 128, 255}` 将索引映射为实际 PWM 值。
+
+2. **旋转设置从未生效**
+   - `displayOrientation` 保存到 EEPROM 是正常的，但 `flushDisplay()` 从未读取过它，内容始终以 Normal 方向输出。
+   - 新代码：在 `flushDisplay()` 内增加 `applyOrientation()` 函数，在蛇形映射前先对 `displayMatrix` 做像素重映射。
+
+### 修复内容
+
+- 新增 `BRIGHTNESS_MAP[3] = {25, 128, 255}` 查表
+- `setup()` 及 `configSaveCallback` 均改用 `mapBrightness(idx)` 转换
+- 新增 `applyOrientation(src, dst)` 函数，支持：
+  - `0` = Normal（不变）
+  - `2` = 180° 旋转
+  - `4` = H-Flip（左右镜像）
+  - `5` = V-Flip（上下镜像）
+  - `1/3` = 90°/270°（非正方形屏不适合，近似为 Normal）
+- `flushDisplay()` 调用链改为：`displayMatrix` → `applyOrientation()` → `convertToSnakeOrder()` → `FastLED.show()`
+- Serial 日志新增：`[Boot] Brightness idx=N (raw=M) | Orientation=N` 和 `[Config saved] brightness idx=N orientation=N`
+
+### 验证方法
+
+1. 刷机后在 Web UI → Configuration 将 Brightness 改为 Bright，Orientation 改为 H-Flip，保存。
+2. 重启（断电或 Web 重启按钮）。
+3. 串口应输出 `Brightness idx=2 (raw=255) | Orientation=4`，显示屏应以最大亮度+镜像方向显示。
