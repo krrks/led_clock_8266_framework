@@ -19,12 +19,36 @@
     },
     {
         "name": "brightness",
-        "label": "Brightness",
+        "label": "Brightness Level",
         "type": "uint8_t",
         "control": "select",
         "options": [0, 1, 2],
-        "optionLabels": ["Dim (very dark)", "Medium", "Bright"],
+        "optionLabels": ["Dim", "Medium", "Bright"],
         "value": 1
+    },
+    {
+        "name": "brightDim",
+        "label": "Dim PWM Value (1-200)",
+        "type": "uint8_t",
+        "min": 1,
+        "max": 200,
+        "value": 25
+    },
+    {
+        "name": "brightMed",
+        "label": "Medium PWM Value (1-255)",
+        "type": "uint8_t",
+        "min": 1,
+        "max": 255,
+        "value": 128
+    },
+    {
+        "name": "brightBrt",
+        "label": "Bright PWM Value (1-255)",
+        "type": "uint8_t",
+        "min": 1,
+        "max": 255,
+        "value": 255
     },
     {
         "name": "use24h",
@@ -56,12 +80,28 @@
         "name": "timezone",
         "label": "Timezone (POSIX TZ string)",
         "type": "char",
-        "length": 32,
+        "length": 48,
         "value": "HKT-8"
     },
     {
         "type": "header",
+        "text": "Connectivity"
+    },
+    {
+        "name": "wifiEnabled",
+        "label": "WiFi Enabled at Boot (false = offline / saves ~70 mA)",
+        "type": "bool",
+        "value": true
+    },
+    {
+        "type": "header",
         "text": "Weather (OpenWeatherMap)"
+    },
+    {
+        "name": "defaultWeather",
+        "label": "Weather Fetch Enabled by Default",
+        "type": "bool",
+        "value": true
     },
     {
         "name": "weatherApiKey",
