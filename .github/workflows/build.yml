@@ -263,16 +263,14 @@ jobs:
       - name: Build firmware (d1_mini)
         run: pio run -e d1_mini
 
-      - name: Build filesystem image (LittleFS)
-        run: pio run -e d1_mini -t buildfs
+      # NOTE: no buildfs step — the web UI is embedded in PROGMEM (html.h),
+      # so there is no data/ directory and no filesystem image to build.
 
-      - name: Upload firmware + filesystem artifacts
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware-d1_mini
-          path: |
-            .pio/build/d1_mini/firmware.bin
-            .pio/build/d1_mini/littlefs.bin
+          path: .pio/build/d1_mini/firmware.bin
           retention-days: 30
 
       - name: Create GitHub Release
@@ -286,8 +284,7 @@ jobs:
           gh release create "$TAG" \
             --title "Firmware $TAG" \
             --notes "$BODY" \
-            .pio/build/d1_mini/firmware.bin \
-            .pio/build/d1_mini/littlefs.bin
+            .pio/build/d1_mini/firmware.bin
           echo "✅ Release $TAG created"
 
 # ════════════════════════════════════════════════════════════════════
