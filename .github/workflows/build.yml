@@ -116,10 +116,8 @@ jobs:
         run: |
           PATCH_NAME=$(basename "${{ needs.check.outputs.patch_path }}" .zip)
 
-          # Remove the consumed patch (and any leftover scripts)
           rm -f zip_update/patches/*.zip zip_update/patches/apply.sh
 
-          # Append to applied log (keep last 50 entries)
           echo "$PATCH_NAME" >> zip_update/applied_patches.txt
           tail -n 50 zip_update/applied_patches.txt > /tmp/ap.txt \
             && mv /tmp/ap.txt zip_update/applied_patches.txt
@@ -167,19 +165,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      # ── FIX 1: correct toolchain path (no leading dot on "packages") ──────
-      - name: Cache PlatformIO toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.platformio/packages
-            ~/.platformio/platforms
-            ~/.platformio/python3
-          key: pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-v2
-          restore-keys: |
-            pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-
-            pio-toolchain-${{ runner.os }}-
-
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
@@ -190,10 +175,20 @@ jobs:
       - name: Install PlatformIO + Python deps
         run: pip install --upgrade pip platformio asn1crypto
 
-      - name: Install PlatformIO platform
-        run: pio pkg install --environment d1_mini --skip-dependencies
+      # ── Toolchain cache (correct path, no leading dot) ────────────────────
+      - name: Cache PlatformIO toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            ~/.platformio/python3
+          key: pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-v3
+          restore-keys: |
+            pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-
+            pio-toolchain-${{ runner.os }}-
 
-      # ── FIX 2: correct library path (.pio/libdeps, not ~/.platformio/lib) ─
+      # ── Library cache (project-local .pio/libdeps) ────────────────────────
       - name: Cache PlatformIO libraries
         id: pio_lib_cache
         uses: actions/cache@v4
@@ -204,7 +199,8 @@ jobs:
             pio-lib-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
             pio-lib-${{ runner.os }}-
 
-      - name: Install PlatformIO libraries
+      # Single install step — handles both platform + libraries
+      - name: Install PlatformIO platform & libraries
         run: pio pkg install --environment d1_mini
 
       - name: Set up Node.js 18
@@ -212,49 +208,48 @@ jobs:
         with:
           node-version: '18'
 
-      # ── FIX 3: search .pio/libdeps (not ~/.platformio/lib) ───────────────
-      - name: Install npm deps in framework (pre-empts preBuildHTML npm ci)
+      # ── npm pre-install ───────────────────────────────────────────────────
+      # The framework directory is named "ESP8266 IoT Framework" (contains spaces).
+      # We must use find -print0 / read -d '' to handle the name correctly —
+      # never pipe through xargs dirname which splits on whitespace.
+      - name: Install npm deps in framework
         run: |
           set -euo pipefail
 
-          FW_DIR=$(find .pio/libdeps -maxdepth 4 -name "package.json" \
-                   ! -path "*/node_modules/*" 2>/dev/null \
-                   | xargs grep -l '"webpack"' 2>/dev/null \
-                   | head -1 | xargs -r dirname || echo "")
-
-          # Fallback: any package.json that has a "build" script
-          if [ -z "$FW_DIR" ]; then
-            FW_DIR=$(find .pio/libdeps -maxdepth 4 -name "package.json" \
-                     ! -path "*/node_modules/*" 2>/dev/null \
-                     | head -1 | xargs -r dirname || echo "")
-          fi
+          # Locate the framework directory directly (maxdepth 1 = immediate subdir)
+          FW_DIR=""
+          while IFS= read -r -d '' dir; do
+            if [ -f "$dir/package.json" ]; then
+              FW_DIR="$dir"
+              break
+            fi
+          done < <(find .pio/libdeps/d1_mini -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
 
           if [ -z "$FW_DIR" ]; then
-            echo "⚠️  Framework package.json not found in .pio/libdeps — skipping npm pre-install"
+            echo "⚠️  No package.json found under .pio/libdeps/d1_mini — skipping npm pre-install"
             echo "    (PlatformIO will run npm ci automatically during build)"
             exit 0
           fi
 
           echo "Framework found at: $FW_DIR"
 
-          # Cache node_modules alongside the library so it survives across runs
           if [ -d "$FW_DIR/node_modules" ]; then
             echo "✅ node_modules already present (cache hit) — skipping npm install"
           else
-            echo "📦 Running npm install --legacy-peer-deps in $FW_DIR"
+            echo "📦 Running npm install --legacy-peer-deps"
             cd "$FW_DIR"
             npm install --legacy-peer-deps
             echo "✅ npm install complete"
           fi
 
-      # Cache node_modules inside the framework so the next run skips npm
+      # Cache node_modules so the next run skips npm entirely.
+      # Use a stable path glob that survives the space in the dir name.
       - name: Cache framework node_modules
         uses: actions/cache@v4
         with:
-          path: .pio/libdeps/**/node_modules
-          key: npm-fw-${{ runner.os }}-${{ hashFiles('.pio/libdeps/**/package.json', '!.pio/libdeps/**/node_modules/**') }}
-          restore-keys: |
-            npm-fw-${{ runner.os }}-
+          path: .pio/libdeps/d1_mini/ESP8266 IoT Framework/node_modules
+          key: npm-fw-${{ runner.os }}-${{ hashFiles('.pio/libdeps/d1_mini/ESP8266 IoT Framework/package.json') }}
+          restore-keys: npm-fw-${{ runner.os }}-
 
       - name: Cache PlatformIO build artifacts
         uses: actions/cache@v4
