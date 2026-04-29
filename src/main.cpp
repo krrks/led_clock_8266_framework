@@ -17,6 +17,8 @@
 
 #include <Arduino.h>
 #include "LittleFS.h"
+#define FASTLED_ALLOW_INTERRUPTS 0     // Most important for stability on ESP8266
+#define FASTLED_INTERRUPT_RETRY_COUNT 0
 #include <FastLED.h>
 #include <ESP8266WiFi.h>
 #include <time.h>
@@ -528,5 +530,5 @@ void loop() {
     if (isIdle && (!wifiActive || GUI.ws.count() == 0) && appMode == AM_NORMAL)
         delay(50);
     else
-        delay(5);
+        delay(10);
 }
