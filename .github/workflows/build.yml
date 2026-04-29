@@ -167,6 +167,19 @@ jobs:
         with:
           python-version: '3.11'
 
+      # ── FIX 1: correct toolchain path (no leading dot on "packages") ──────
+      - name: Cache PlatformIO toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            ~/.platformio/python3
+          key: pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-v2
+          restore-keys: |
+            pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-
+            pio-toolchain-${{ runner.os }}-
+
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
@@ -177,18 +190,11 @@ jobs:
       - name: Install PlatformIO + Python deps
         run: pip install --upgrade pip platformio asn1crypto
 
-      # BUG FIX: PlatformIO uses 'packages', not '.packages'.
-      - name: Cache PlatformIO toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.platformio/packages
-            ~/.platformio/platforms
-          key: pio-toolchain-${{ runner.os }}-espressif8266@3.0.0
-          restore-keys: pio-toolchain-${{ runner.os }}-
+      - name: Install PlatformIO platform
+        run: pio pkg install --environment d1_mini --skip-dependencies
 
-      # BUG FIX: Project libraries live in .pio/libdeps, not ~/.platformio/lib.
-      - name: Cache PlatformIO libraries (includes framework node_modules)
+      # ── FIX 2: correct library path (.pio/libdeps, not ~/.platformio/lib) ─
+      - name: Cache PlatformIO libraries
         id: pio_lib_cache
         uses: actions/cache@v4
         with:
@@ -198,7 +204,7 @@ jobs:
             pio-lib-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
             pio-lib-${{ runner.os }}-
 
-      - name: Install PlatformIO platform & libraries
+      - name: Install PlatformIO libraries
         run: pio pkg install --environment d1_mini
 
       - name: Set up Node.js 18
@@ -206,19 +212,32 @@ jobs:
         with:
           node-version: '18'
 
-      # BUG FIX: Searching .pio/libdeps for the framework's package.json.
+      # ── FIX 3: search .pio/libdeps (not ~/.platformio/lib) ───────────────
       - name: Install npm deps in framework (pre-empts preBuildHTML npm ci)
         run: |
-          FW_DIR=$(find .pio/libdeps -maxdepth 3 -name "package.json" \
-                   ! -path "*/node_modules/*" 2>/dev/null | head -1 | xargs -r dirname)
+          set -euo pipefail
+
+          FW_DIR=$(find .pio/libdeps -maxdepth 4 -name "package.json" \
+                   ! -path "*/node_modules/*" 2>/dev/null \
+                   | xargs grep -l '"webpack"' 2>/dev/null \
+                   | head -1 | xargs -r dirname || echo "")
+
+          # Fallback: any package.json that has a "build" script
+          if [ -z "$FW_DIR" ]; then
+            FW_DIR=$(find .pio/libdeps -maxdepth 4 -name "package.json" \
+                     ! -path "*/node_modules/*" 2>/dev/null \
+                     | head -1 | xargs -r dirname || echo "")
+          fi
 
           if [ -z "$FW_DIR" ]; then
-            echo "⚠️  Framework package.json not found — skipping npm pre-install"
+            echo "⚠️  Framework package.json not found in .pio/libdeps — skipping npm pre-install"
+            echo "    (PlatformIO will run npm ci automatically during build)"
             exit 0
           fi
 
           echo "Framework found at: $FW_DIR"
 
+          # Cache node_modules alongside the library so it survives across runs
           if [ -d "$FW_DIR/node_modules" ]; then
             echo "✅ node_modules already present (cache hit) — skipping npm install"
           else
@@ -227,6 +246,15 @@ jobs:
             npm install --legacy-peer-deps
             echo "✅ npm install complete"
           fi
+
+      # Cache node_modules inside the framework so the next run skips npm
+      - name: Cache framework node_modules
+        uses: actions/cache@v4
+        with:
+          path: .pio/libdeps/**/node_modules
+          key: npm-fw-${{ runner.os }}-${{ hashFiles('.pio/libdeps/**/package.json', '!.pio/libdeps/**/node_modules/**') }}
+          restore-keys: |
+            npm-fw-${{ runner.os }}-
 
       - name: Cache PlatformIO build artifacts
         uses: actions/cache@v4
@@ -240,11 +268,16 @@ jobs:
       - name: Build firmware (d1_mini)
         run: pio run -e d1_mini
 
-      - name: Upload firmware artifact
+      - name: Build filesystem image (LittleFS)
+        run: pio run -e d1_mini -t buildfs
+
+      - name: Upload firmware + filesystem artifacts
         uses: actions/upload-artifact@v4
         with:
           name: firmware-d1_mini
-          path: .pio/build/d1_mini/firmware.bin
+          path: |
+            .pio/build/d1_mini/firmware.bin
+            .pio/build/d1_mini/littlefs.bin
           retention-days: 30
 
       - name: Create GitHub Release
@@ -258,7 +291,8 @@ jobs:
           gh release create "$TAG" \
             --title "Firmware $TAG" \
             --notes "$BODY" \
-            .pio/build/d1_mini/firmware.bin
+            .pio/build/d1_mini/firmware.bin \
+            .pio/build/d1_mini/littlefs.bin
           echo "✅ Release $TAG created"
 
 # ════════════════════════════════════════════════════════════════════
