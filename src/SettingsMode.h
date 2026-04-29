@@ -1,29 +1,42 @@
 #pragma once
-// SettingsMode.h — on-device settings editor (BTN_MODE 3 s to enter/exit)
+// SettingsMode.h — on-device settings editor (BTN1 MODE 3 s to enter/exit)
 //
-// User navigates items with BTN_MODE click,
-// adjusts value with BTN_UP (+1) / BTN_DOWN (-1).
-// Auto-saves and exits after SETTINGS_TIMEOUT or another 3 s long press.
+// Navigation:
+//   BTN1 MODE  click       → next item
+//   BTN2 UP    click/hold  → value +1 / +5
+//   BTN3 DOWN  click/hold  → value -1 / -5
+//   BTN4 CONFIRM click     → save & exit
+//   BTN4 CONFIRM hold 3 s  → cancel (restore snapshot)
+//   BTN1 MODE  hold 3 s    → save & exit
+//   auto-timeout 30 s      → save & exit
 
 #include <Arduino.h>
+#include "configManager.h"   // for configData type
 
-// Timezone preset list (label shown on LED, posix stored in config)
+// Timezone preset list
 struct TzPreset { const char* label; const char* posix; };
 extern const TzPreset TZ_PRESETS[];
 extern const int      TZ_COUNT;
 int findTzPreset(const char* posix);   // returns -1 if not in list
 
-// Build active setting indices (skips time/date items when NTP is synced)
+// Config snapshot — saved on settings entry, restored on cancel
+extern configData settingsSnapshot;
+
+// Build active setting indices (skips time/date when NTP is synced).
+// Also saves settingsSnapshot.
 void buildActiveSettings();
 
-// Return the display string for a given SI_* index into buf (len bytes)
+// Return a short display string for setting at SI_* index into buf.
 void getSettingStr(int idx, char* buf, int len);
 
-// Apply delta (+1/-1) to the setting at SI_* idx; saves brightness immediately
+// Apply delta (+1/-1 for short, +5/-5 for medium) to a setting.
 void adjustSetting(int idx, int delta);
 
-// Draw settings overlay onto displayMatrix
+// Draw settings overlay onto displayMatrix using ClockDisplay primitives.
 void drawSettingsFace();
 
-// Commit configManager, update timezone + manual time base, return to AM_NORMAL
+// Commit configManager, apply tz/time, return to AM_NORMAL.
 void saveAndExitSettings();
+
+// Restore snapshot, revert live state, return to AM_NORMAL without saving.
+void cancelAndExitSettings();

@@ -24,7 +24,7 @@
         "control": "select",
         "options": [0, 1, 2],
         "optionLabels": ["Dim", "Medium", "Bright"],
-        "value": 1
+        "value": 0
     },
     {
         "name": "brightDim",
@@ -32,7 +32,7 @@
         "type": "uint8_t",
         "min": 1,
         "max": 200,
-        "value": 25
+        "value": 1
     },
     {
         "name": "brightMed",
@@ -57,20 +57,49 @@
         "value": true
     },
     {
-        "name": "displayOrientation",
-        "label": "Display Orientation",
+        "type": "header",
+        "text": "Display Orientation"
+    },
+    {
+        "name": "rotation",
+        "label": "Rotation",
         "type": "uint8_t",
         "control": "select",
-        "options": [0, 1, 2, 3, 4, 5],
+        "options": [0, 1, 2, 3],
         "optionLabels": [
-            "Normal",
-            "90 deg CW",
-            "180 deg (upside-down)",
-            "270 deg CW",
+            "0° (Normal)",
+            "90° CW",
+            "180° (Upside-down)",
+            "270° CW"
+        ],
+        "value": 0
+    },
+    {
+        "name": "flip",
+        "label": "Flip",
+        "type": "uint8_t",
+        "control": "select",
+        "options": [0, 1, 2],
+        "optionLabels": [
+            "None",
             "H-Flip (mirror left-right)",
             "V-Flip (mirror top-bottom)"
         ],
         "value": 0
+    },
+    {
+        "type": "header",
+        "text": "Scroll Speed"
+    },
+    {
+        "name": "scrollSpeed",
+        "label": "Scroll Speed (ms per column, larger = slower)",
+        "type": "uint8_t",
+        "control": "slider",
+        "min": 30,
+        "max": 200,
+        "step": 5,
+        "value": 80
     },
     {
         "type": "header",
@@ -89,7 +118,7 @@
     },
     {
         "name": "wifiEnabled",
-        "label": "WiFi Enabled at Boot (false = offline / saves ~70 mA)",
+        "label": "WiFi Enabled at Boot",
         "type": "bool",
         "value": true
     },

@@ -1,5 +1,11 @@
-// main.cpp — LED Matrix Clock v1.006
-// Wemos D1 Mini (ESP8266) + 32×8 WS2812B + 3 buttons + onboard LED
+// main.cpp — LED Matrix Clock v1.007
+// Wemos D1 Mini (ESP8266) + 32×8 WS2812B + 4 buttons + onboard LED
+//
+// Button layout:
+//   BTN1 MODE    GPIO5  D1  — cycle display mode / enter settings (3s)
+//   BTN2 UP      GPIO14 D5  — brightness up / value +1 in settings
+//   BTN3 DOWN    GPIO12 D6  — brightness down / value -1 in settings
+//   BTN4 CONFIRM GPIO13 D7  — save & exit settings (click) / cancel (3s hold)
 //
 // Module layout:
 //   AppState.h          — enums, constants, extern globals
@@ -50,7 +56,9 @@ float   weatherTemp    = 0.0f;
 char    weatherDesc[32]= "N/A";
 int     weatherFails   = 0;
 
-uint8_t  curOrientation = 0;
+uint8_t  curRotation   = 0;   // 0=0°  1=90°CW  2=180°  3=270°CW
+uint8_t  curFlip       = 0;   // 0=none  1=H-flip  2=V-flip
+
 struct tm manualTm      = {};
 uint32_t  manualBase    = 0;
 
@@ -75,20 +83,25 @@ bool          ledBlinkState = false;
 // ─────────────────────────────────────────────────────────────────────
 // Module-local
 // ─────────────────────────────────────────────────────────────────────
-static Btn btnMode, btnUp, btnDown;
+static Btn btnMode, btnUp, btnDown, btnConfirm;
 
+// ── Brightness ────────────────────────────────────────────────────────
 static uint8_t mapBrightness(uint8_t idx) {
     if (idx == 0) return configManager.data.brightDim;
     if (idx == 2) return configManager.data.brightBrt;
     return configManager.data.brightMed;
 }
-static void applyBrightness() {
+
+void applyBrightness() {   // definition — declared extern in AppState.h
     FastLED.setBrightness(mapBrightness(configManager.data.brightness));
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Status LED  (GPIO2, active LOW)
-// ─────────────────────────────────────────────────────────────────────
+// ── Scroll frame interval (runtime) ──────────────────────────────────
+static inline unsigned long scrollFrameMs() {
+    return (unsigned long)configManager.data.scrollSpeed;
+}
+
+// ── Status LED (GPIO2, active LOW) ───────────────────────────────────
 static void updateStatusLED() {
     if (appMode == AM_RECOVERY) {
         unsigned long now = millis();
@@ -97,13 +110,11 @@ static void updateStatusLED() {
             digitalWrite(STATUS_LED_PIN, ledBlinkState ? LOW : HIGH);
         }
     } else {
-        digitalWrite(STATUS_LED_PIN, HIGH);
+        digitalWrite(STATUS_LED_PIN, HIGH);   // OFF (active-low)
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Heartbeat
-// ─────────────────────────────────────────────────────────────────────
+// ── Heartbeat ─────────────────────────────────────────────────────────
 static const char* dmName(DispMode m) {
     switch (m) {
         case DM_DATE: return "date"; case DM_TEMP: return "temp";
@@ -129,17 +140,16 @@ static void printHeartbeat() {
         : "off";
 
     Serial.printf("[Heart] %s heap=%u ntp=%d wx=%d %.1fC [%s] "
-                  "app=%s disp=%s bri=%d ori=%d wifi=%s\n",
+                  "app=%s disp=%s bri=%d rot=%d flip=%d spd=%d wifi=%s\n",
                   tb, ESP.getFreeHeap(), ntpSynced,
                   weatherCode, weatherTemp, weatherEnabled ? "on":"off",
                   appMode==AM_SETTINGS?"SET":(appMode==AM_RECOVERY?"REC":"NRM"),
                   dmName(dispMode), configManager.data.brightness,
-                  curOrientation, wifi.c_str());
+                  curRotation, curFlip, configManager.data.scrollSpeed,
+                  wifi.c_str());
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Dashboard push
-// ─────────────────────────────────────────────────────────────────────
+// ── Dashboard push ────────────────────────────────────────────────────
 static void updateDashboard() {
     struct tm t = {}; bool ok = false;
     if (ntpSynced) {
@@ -175,19 +185,20 @@ void setup() {
     Serial.begin(115200);
     delay(100);
     Serial.println(F("\n================================"));
-    Serial.println(F("  LED Matrix Clock  v1.006"));
+    Serial.println(F("  LED Matrix Clock  v1.007"));
     Serial.println(F("================================"));
     Serial.printf("[Sys] Reset:%s  Heap:%uB  CPU:%uMHz\n",
                   ESP.getResetReason().c_str(), ESP.getFreeHeap(), ESP.getCpuFreqMHz());
 
     pinMode(STATUS_LED_PIN, OUTPUT);
-    digitalWrite(STATUS_LED_PIN, LOW);
+    digitalWrite(STATUS_LED_PIN, LOW);   // ON during boot
 
     btnMode.begin(BUTTON_1_PIN);
     btnUp.begin  (BUTTON_2_PIN);
     btnDown.begin(BUTTON_3_PIN);
-    Serial.printf("[Boot] BTN MODE=GPIO%d UP=GPIO%d DOWN=GPIO%d\n",
-                  BUTTON_1_PIN, BUTTON_2_PIN, BUTTON_3_PIN);
+    btnConfirm.begin(BUTTON_4_PIN);
+    Serial.printf("[Boot] BTN MODE=GPIO%d UP=GPIO%d DOWN=GPIO%d CONFIRM=GPIO%d\n",
+                  BUTTON_1_PIN, BUTTON_2_PIN, BUTTON_3_PIN, BUTTON_4_PIN);
 
     LittleFS.begin();
     configManager.begin();
@@ -195,16 +206,20 @@ void setup() {
     FastLED.addLeds<WS2812B, LED_MATRIX_PIN, GRB>(leds, NUM_LEDS);
     applyBrightness();
     FastLED.clear(true);
-    curOrientation = configManager.data.displayOrientation;
+    curRotation    = configManager.data.rotation;
+    curFlip        = configManager.data.flip;
     weatherEnabled = configManager.data.defaultWeather;
-    Serial.printf("[Boot] bright=%d(raw=%d) orient=%d wx=%d wifi=%d\n",
-                  configManager.data.brightness, mapBrightness(configManager.data.brightness),
-                  curOrientation, weatherEnabled, configManager.data.wifiEnabled);
+    Serial.printf("[Boot] bright=%d(raw=%d) rot=%d flip=%d spd=%d wx=%d wifi=%d\n",
+                  configManager.data.brightness,
+                  mapBrightness(configManager.data.brightness),
+                  curRotation, curFlip, configManager.data.scrollSpeed,
+                  weatherEnabled, configManager.data.wifiEnabled);
 
-    // Web save → immediate LED refresh
+    // Web config save → immediate live update
     configManager.setConfigSaveCallback([]() {
         applyBrightness();
-        curOrientation = configManager.data.displayOrientation;
+        curRotation    = configManager.data.rotation;
+        curFlip        = configManager.data.flip;
         weatherEnabled = configManager.data.defaultWeather;
         if (!ntpSynced) {
             memset(&manualTm, 0, sizeof(manualTm));
@@ -219,9 +234,11 @@ void setup() {
         }
         pendingRedraw = true;
         tLastActivity = millis();
-        Serial.printf("[Config] bright=%d(raw=%d) orient=%d wx=%d\n",
-                      configManager.data.brightness, mapBrightness(configManager.data.brightness),
-                      curOrientation, weatherEnabled);
+        Serial.printf("[Config] bright=%d(raw=%d) rot=%d flip=%d spd=%d wx=%d\n",
+                      configManager.data.brightness,
+                      mapBrightness(configManager.data.brightness),
+                      curRotation, curFlip, configManager.data.scrollSpeed,
+                      weatherEnabled);
     });
 
     // ── Recovery detection ──────────────────────────────────────────
@@ -237,9 +254,9 @@ void setup() {
         }
     }
 
-    // ── Boot window: fast-blink, watch BTN_MODE ─────────────────────
+    // ── Boot window: fast-blink, watch BTN1 ─────────────────────────
     bool bootHold = false;
-    Serial.printf("[Boot] window %lums — hold BTN_MODE for recovery\n", BOOT_WINDOW_MS);
+    Serial.printf("[Boot] window %lums — hold BTN1(MODE) for recovery\n", BOOT_WINDOW_MS);
     unsigned long bootStart = millis();
     while (millis() - bootStart < BOOT_WINDOW_MS) {
         bool c, l, vl; btnMode.poll(c, l, vl);
@@ -304,7 +321,7 @@ void setup() {
     unsigned long now = millis();
     tLastActivity = tLastNtp = tLastWeather = tLastDash = tLastHeart = now;
     tLastDisplay  = 0;
-    digitalWrite(STATUS_LED_PIN, HIGH);
+    digitalWrite(STATUS_LED_PIN, HIGH);   // OFF in normal/recovery (blink handled in loop)
     Serial.printf("[Boot] done  heap=%uB\n================================\n\n",
                   ESP.getFreeHeap());
 }
@@ -320,13 +337,18 @@ void loop() {
 
     unsigned long now = millis();
 
-    bool mClk, mLng, mVLng, uClk, uLng, uVLng, dClk, dLng, dVLng;
-    btnMode.poll(mClk, mLng, mVLng);
-    btnUp.poll  (uClk, uLng, uVLng);
-    btnDown.poll(dClk, dLng, dVLng);
+    bool mClk, mLng, mVLng;
+    bool uClk, uLng, uVLng;
+    bool dClk, dLng, dVLng;
+    bool cClk, cLng, cVLng;   // BTN4 CONFIRM
+    btnMode.poll   (mClk, mLng, mVLng);
+    btnUp.poll     (uClk, uLng, uVLng);
+    btnDown.poll   (dClk, dLng, dVLng);
+    btnConfirm.poll(cClk, cLng, cVLng);
 
-    if (mClk||mLng||mVLng||uClk||uLng||uVLng||dClk||dLng||dVLng) tLastActivity = now;
-    if (wifiActive && GUI.ws.count() > 0) tLastActivity = now;
+    if (mClk||mLng||mVLng||uClk||uLng||uVLng||
+        dClk||dLng||dVLng||cClk||cLng||cVLng)  tLastActivity = now;
+    if (wifiActive && GUI.ws.count() > 0)       tLastActivity = now;
     bool isIdle = (now - tLastActivity > IDLE_TIMEOUT_MS);
 
     // ── Auto-return from IP ───────────────────────────────────────────
@@ -335,86 +357,140 @@ void loop() {
         pendingRedraw = true; Serial.println("[IP] auto-return to clock");
     }
 
-    // ── Button dispatch ───────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════
+    // Button dispatch
+    // ════════════════════════════════════════════════════════════════
+
+    // ── NORMAL mode ───────────────────────────────────────────────────
     if (appMode == AM_NORMAL) {
 
-        if      (mVLng) { Serial.println("[Btn] MODE 8 s → recovery"); triggerRecovery(); }
-        else if (mLng)  {
+        // BTN1 MODE
+        if      (mVLng) {
+            Serial.println("[Btn] MODE 8 s → recovery");
+            triggerRecovery();
+        }
+        else if (mLng) {
             Serial.println("[Btn] MODE 3 s → settings");
             appMode = AM_SETTINGS; buildActiveSettings();
-            settingsCursor = 0; tSettingsEntry = now; scrollOff = 0; pendingRedraw = true;
+            settingsCursor = 0; tSettingsEntry = now; scrollOff = 0;
+            pendingRedraw = true;
         }
-        else if (mClk)  {
+        else if (mClk) {
+            // Cycle: CLOCK → DATE → TEMP → IP → CLOCK
             dispMode = (DispMode)((dispMode + 1) % DM_COUNT);
-            tShowIPUntil = 0; scrollOff = 0; pendingRedraw = true;
+            tShowIPUntil = 0; scrollOff = 0;
+            pendingRedraw = true;   // immediate redraw for every mode
             Serial.printf("[Btn] MODE click → %s\n", dmName(dispMode));
         }
 
+        // BTN2 UP
         if      (uVLng) { triggerRecovery(); }
-        else if (uLng)  {
+        else if (uLng) {
             Serial.println("[Btn] UP 3 s → force NTP+wx");
             if (!ntpSynced && timeSync.waitForSyncResult(3000)==0) ntpSynced = true;
             tLastNtp = now; fetchWeather(); tLastWeather = now;
+            pendingRedraw = true;
         }
-        else if (uClk)  {
+        else if (uClk) {
             uint8_t b = (configManager.data.brightness + 1) % 3;
             configManager.data.brightness = b; configManager.save(); applyBrightness();
             pendingRedraw = true;
             Serial.printf("[Btn] UP → bright %d(raw=%d)\n", b, mapBrightness(b));
         }
 
+        // BTN3 DOWN
         if      (dVLng) { triggerRecovery(); }
-        else if (dLng)  {
+        else if (dLng) {
             weatherEnabled = !weatherEnabled;
             configManager.data.defaultWeather = weatherEnabled; configManager.save();
             pendingRedraw = true;
             Serial.printf("[Btn] DOWN 3 s → weather %s\n", weatherEnabled?"ON":"OFF");
         }
-        else if (dClk)  {
-            uint8_t b = configManager.data.brightness==0 ? 2 : configManager.data.brightness-1;
+        else if (dClk) {
+            uint8_t b = (configManager.data.brightness == 0) ? 2
+                        : configManager.data.brightness - 1;
             configManager.data.brightness = b; configManager.save(); applyBrightness();
             pendingRedraw = true;
             Serial.printf("[Btn] DOWN → bright %d(raw=%d)\n", b, mapBrightness(b));
         }
+
+        // BTN4 CONFIRM — in normal mode: show IP for 8 s (quick shortcut)
+        if (cClk) {
+            dispMode = DM_IP; scrollOff = 0;
+            tShowIPUntil = now + IP_SHOW_MS;
+            pendingRedraw = true;
+            Serial.println("[Btn] CONFIRM → show IP");
+        }
     }
+
+    // ── SETTINGS mode ─────────────────────────────────────────────────
     else if (appMode == AM_SETTINGS) {
         if (now - tSettingsEntry >= SETTINGS_TIMEOUT) {
-            Serial.println("[Settings] timeout → save"); saveAndExitSettings();
+            Serial.println("[Settings] timeout → save");
+            saveAndExitSettings();
         } else {
-            if (mVLng) { saveAndExitSettings(); triggerRecovery(); }
-            else if (mLng) { Serial.println("[Btn] MODE 3 s → save"); saveAndExitSettings(); }
+            // BTN1 MODE: cycle items  /  long-press: save & exit  / vlong: recovery
+            if      (mVLng) { saveAndExitSettings(); triggerRecovery(); }
+            else if (mLng)  { Serial.println("[Btn] MODE 3 s → save"); saveAndExitSettings(); }
             else if (mClk && settingsCount > 0) {
-                settingsCursor = (settingsCursor+1) % settingsCount;
+                settingsCursor = (settingsCursor + 1) % settingsCount;
                 scrollOff = 0; pendingRedraw = true;
                 char buf[24]; getSettingStr(settingsActive[settingsCursor], buf, sizeof(buf));
                 Serial.printf("[Settings] %d/%d %s\n", settingsCursor+1, settingsCount, buf);
             }
-            if ((uClk||uLng||uVLng) && settingsCount > 0) adjustSetting(settingsActive[settingsCursor], +1);
-            if ((dClk||dLng||dVLng) && settingsCount > 0) adjustSetting(settingsActive[settingsCursor], -1);
+
+            // BTN2 UP: +1 (click) / +5 (long)
+            if      (uLng || uVLng) { if (settingsCount > 0) adjustSetting(settingsActive[settingsCursor], +5); }
+            else if (uClk)          { if (settingsCount > 0) adjustSetting(settingsActive[settingsCursor], +1); }
+
+            // BTN3 DOWN: -1 (click) / -5 (long)
+            if      (dLng || dVLng) { if (settingsCount > 0) adjustSetting(settingsActive[settingsCursor], -5); }
+            else if (dClk)          { if (settingsCount > 0) adjustSetting(settingsActive[settingsCursor], -1); }
+
+            // BTN4 CONFIRM click → save & exit  /  hold 3 s → cancel
+            if      (cVLng) { Serial.println("[Btn] CONFIRM 8 s → recovery"); saveAndExitSettings(); triggerRecovery(); }
+            else if (cLng)  { Serial.println("[Btn] CONFIRM 3 s → cancel"); cancelAndExitSettings(); }
+            else if (cClk)  { Serial.println("[Btn] CONFIRM click → save"); saveAndExitSettings(); }
         }
     }
-    else { // AM_RECOVERY
-        if (mLng) {
-            Serial.println("[Recovery] BTN 3 s → clear & reboot");
+
+    // ── RECOVERY mode ─────────────────────────────────────────────────
+    else {
+        // BTN1 long-press clears RTC flag and reboots (exit recovery)
+        if (mLng || mVLng) {
+            Serial.println("[Recovery] BTN1 3 s → clear flag & reboot");
+            RTCData rtc = { RTC_MAGIC, 0 };
+            ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
+            delay(50); ESP.restart();
+        }
+        // BTN4 CONFIRM click → same (convenient exit)
+        if (cClk) {
+            Serial.println("[Recovery] CONFIRM → clear flag & reboot");
             RTCData rtc = { RTC_MAGIC, 0 };
             ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
             delay(50); ESP.restart();
         }
     }
 
-    // ── Render ───────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════
+    // Render
+    // ════════════════════════════════════════════════════════════════
     {
-        bool scrolling = (appMode==AM_RECOVERY)
-                      || (appMode==AM_NORMAL && dispMode==DM_IP)
-                      || (appMode==AM_SETTINGS);
-        unsigned long interval = scrolling ? SCROLL_FRAME_MS
-                                           : (isIdle ? IDLE_REFRESH : ACTIVE_REFRESH);
-        if (pendingRedraw || now - tLastDisplay >= interval) {
+        bool scrolling = (appMode == AM_RECOVERY)
+                      || (appMode == AM_NORMAL  && dispMode == DM_IP)
+                      || (appMode == AM_SETTINGS);
+        unsigned long frameMs = scrolling ? scrollFrameMs()
+                                          : (isIdle ? IDLE_REFRESH : ACTIVE_REFRESH);
+        if (pendingRedraw || now - tLastDisplay >= frameMs) {
             pendingRedraw = false; tLastDisplay = now;
             clearDisplay();
             switch (appMode) {
-                case AM_RECOVERY: drawScroll("RECOVERY", C_ORANGE); break;
-                case AM_SETTINGS: drawSettingsFace();               break;
+                case AM_RECOVERY:
+                    drawScroll("RECOVERY", C_ORANGE);
+                    break;
+                case AM_SETTINGS:
+                    drawSettingsFace();
+                    break;
                 default:
                     switch (dispMode) {
                         case DM_CLOCK: drawClockFace(); break;
@@ -427,12 +503,18 @@ void loop() {
         }
     }
 
-    // ── Background tasks ──────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════
+    // Background tasks (normal mode only)
+    // ════════════════════════════════════════════════════════════════
     if (appMode == AM_NORMAL) {
-        if (now - tLastDash >= (unsigned long)DASH_INT_MS) { tLastDash = now; updateDashboard(); }
+        if (now - tLastDash >= (unsigned long)DASH_INT_MS) {
+            tLastDash = now; updateDashboard();
+        }
         if (wifiActive && now - tLastNtp >= NTP_INTERVAL_MS) {
             tLastNtp = now;
-            if (timeSync.waitForSyncResult(5000)==0) { ntpSynced=true; Serial.println("[NTP] re-sync OK"); }
+            if (timeSync.waitForSyncResult(5000) == 0) {
+                ntpSynced = true; Serial.println("[NTP] re-sync OK");
+            }
         }
         if (wifiActive && weatherEnabled && now - tLastWeather >= WEATHER_INT_MS) {
             tLastWeather = now; fetchWeather();
@@ -442,9 +524,8 @@ void loop() {
 
     updateStatusLED();
 
-    // Idle: ~20 Hz saves CPU; active: ~200 Hz keeps buttons responsive.
-    // delay() on ESP8266 always yields to the WiFi SDK task.
-    if (isIdle && (!wifiActive || GUI.ws.count()==0) && appMode==AM_NORMAL)
+    // Idle: ~20 Hz saves CPU; active: ~200 Hz keeps buttons snappy.
+    if (isIdle && (!wifiActive || GUI.ws.count() == 0) && appMode == AM_NORMAL)
         delay(50);
     else
         delay(5);

@@ -6,6 +6,7 @@
 //   BTN1 MODE     GPIO5  D1   (INPUT_PULLUP, active LOW)
 //   BTN2 UP       GPIO14 D5   (INPUT_PULLUP, active LOW)
 //   BTN3 DOWN     GPIO12 D6   (INPUT_PULLUP, active LOW)
+//   BTN4 CONFIRM  GPIO13 D7   (INPUT_PULLUP, active LOW) ← NEW
 //   Onboard LED   GPIO2  D4   (active LOW, built-in)
 
 #ifndef PINDEFINITIONS_H
@@ -17,6 +18,7 @@
 #define BUTTON_1_PIN    5   // GPIO5  / D1 — MODE / SELECT
 #define BUTTON_2_PIN   14   // GPIO14 / D5 — UP   / BRIGHTER
 #define BUTTON_3_PIN   12   // GPIO12 / D6 — DOWN / DIMMER
+#define BUTTON_4_PIN   13   // GPIO13 / D7 — CONFIRM / CANCEL
 
 // Legacy alias (keeps any old code referencing BUTTON_PIN compiling)
 #ifndef BUTTON_PIN

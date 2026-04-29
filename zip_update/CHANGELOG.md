@@ -1,56 +1,59 @@
 #!build
-## v1.006 — 按钮重构 + 设置模式 + 低功耗 + 天气代码修正
+## v1.007 — 四键操作 + 旋转/翻转分离 + 滚动速度可配置
 
-### 按钮变更
-- **移除双击检测**。每个按钮统一三级：单击 / 长按3秒 / 长按8秒
-- 旧的双击等待窗口（500 ms）导致单击经常被误判为双击——完全移除后单击立即响应（松手即触发）
-- 全新内联 `Btn` 状态机替换 `ButtonHandler`，消除静态变量复位 Bug
+### 新增：第四个物理按钮 BTN4 CONFIRM (GPIO13 / D7)
+- 普通模式 单击    → 立即显示 IP 地址 8 秒
+- 设置模式 单击    → 保存并退出设置
+- 设置模式 长按3秒 → **取消**（恢复快照，不保存）
+- 恢复模式 单击    → 清除恢复标志并重启（退出恢复）
+- 接线方式：一端接 GPIO13(D7)，另一端接 GND；内置上拉，无需外部电阻
 
-### 显示模式 (BTN_MODE 单击循环)
-- 顺序改为：**CLOCK → DATE → TEMP → IP → CLOCK**
+### 旋转与翻转拆分为独立配置
+- 旧 `displayOrientation`（6选1混合项）已替换为：
+  - `rotation`：0° / 90°CW / 180° / 270°CW（单独选择）
+  - `flip`：无 / H-Flip（左右镜像） / V-Flip（上下镜像）
+- 两者可叠加：例如 180° + H-Flip = V-Flip + 180°
+- 在设置模式（LED矩阵）显示为 `RO:N/90/180/270` 和 `FL:N/H/V`
+- Web Configuration 页面同步更新两个独立下拉菜单
 
-### 新增：设置模式
-- **BTN_MODE 长按3秒** 进入设置模式
-- BTN_UP / BTN_DOWN 单击对当前项 +1 / −1（亮度步长5）
-- BTN_MODE 单击切换到下一个设置项；再次长按3秒或超时30秒自动保存并退出
-- **NTP已同步时隐藏时间/日期项**（避免与自动时钟冲突）
-- 设置项目（LED矩阵上以青色显示）：
-  1. `H:` 小时 / `m:` 分钟 / `d:` 日 / `Mo:` 月 / `Y:` 年 / `Wd:` 星期 ← 仅在无NTP时
-  2. `TZ:` 时区 — 在17个常见POSIX预设中循环（UTC、HKT、JST、EST…）
-  3. `DM:` 暗档PWM值 / `MD:` 中档 / `BR:` 亮档（步长5，范围1-255）
-  4. `Wx:ON/OFF` 天气开关
-  5. `Wi:ON/OFF` WiFi开关
+### 模式切换立即刷新
+- 点击 BTN1 MODE 切换 CLOCK/DATE/TEMP/IP 时，LED 立即重绘
+  （之前只有 IP 模式立即刷新，其他模式等待下一周期）
 
-### BTN_MODE 长按8秒 → 恢复模式（原5秒改为8秒，与3秒设置模式区分）
+### 默认亮度改为最低档
+- `brightness` 默认值：`1`（Medium）→ `0`（Dim）
+- `brightDim` 默认 PWM 值：`25` → `1`（开发阶段尽量暗）
 
-### BTN_UP / BTN_DOWN 功能
-- 单击：亮度 +1 / −1（DIM→MED→BRT 循环）
-- 长按3秒：强制刷新NTP+天气 / 切换天气开关
-- 长按8秒：进入恢复模式
+### 滚动速度可配置
+- 新增 `scrollSpeed` 配置项（uint8_t，30-200 ms/列，默认 80）
+- Web 页面提供滑动条调节
+- 设置模式 LED 矩阵显示 `SP:xx`
+- 适用于所有滚动文本：IP 地址、RECOVERY、设置项标签
+- 注意：原编译时常量 `SCROLL_FRAME_MS=60ms` 已作废，运行时读取配置
 
-### 低功耗
-- 空闲时（30秒无操作 + 无WS客户端）`delay(50)` ≈ 20 Hz
-- 活跃时 `delay(5)` ≈ 200 Hz，保证按钮响应灵敏
-- wifiEnabled=false 时关闭WiFi无线（省电约70 mA）
+### 设置模式按键调整
+- BTN2 UP / BTN3 DOWN **长按** → ±5（快速调节）；**单击** → ±1（精细调节）
+- BTN4 CONFIRM 添加为主要的保存/取消键（详见上方）
+- 超时保存时间仍为 30 秒
 
-### 配置新增字段（configuration.json）
-- `brightDim` / `brightMed` / `brightBrt`：三档绝对PWM值（默认25/128/255）
-- `wifiEnabled`：启动时是否连接WiFi
-- `defaultWeather`：默认天气开关状态
-- `timezone` 字段长度从32扩展为48，支持更长的POSIX时区字符串
+### 按键功能总览（v1.007）
+| 按键 | 按压类型 | 普通模式 | 设置模式 | 恢复模式 |
+|------|---------|---------|---------|---------|
+| BTN1 MODE | 单击 | 切换显示模式 | 下一设置项 | — |
+| BTN1 MODE | 长按3s | 进入设置模式 | 保存退出 | 清除标志重启 |
+| BTN1 MODE | 长按8s | 进入恢复模式 | 保存+恢复 | — |
+| BTN2 UP | 单击 | 亮度+1 | 值+1 | — |
+| BTN2 UP | 长按3s | 强制NTP+天气刷新 | 值+5 | — |
+| BTN3 DOWN | 单击 | 亮度-1 | 值-1 | — |
+| BTN3 DOWN | 长按3s | 切换天气开关 | 值-5 | — |
+| BTN4 CONFIRM | 单击 | 显示IP 8秒 | **保存**退出 | 清除标志重启 |
+| BTN4 CONFIRM | 长按3s | — | **取消**退出 | — |
 
-> ⚠️ **配置结构变更**：首次刷新后EEPROM自动重置为默认值，需重新在Web界面配置。
-
-### 立即刷新LED
-- Web端或按键端修改配置后立即调用 `applyBrightness()` + `flushDisplay()`
-- configSaveCallback 同时更新方向、天气开关、手动时间基准
-
-### 天气代码修正（OWM group ranges）
-- 2xx Thunderstorm (200-299) → 紫色
-- 3xx Drizzle (300-399) → 浅蓝色
-- 5xx Rain (500-599) → 蓝色
-- 6xx Snow (600-699) → 冰蓝色
-- 7xx Atmosphere/fog/mist (700-799) → 灰色
-- 800 Clear → 黄色
-- 801-802 Few/scattered clouds → 浅黄色
-- 803-804 Broken/overcast → 中灰色
+### 配置结构变更（EEPROM 自动重置）
+- 移除 `displayOrientation`（uint8_t）
+- 新增 `rotation`（uint8_t，默认0）
+- 新增 `flip`（uint8_t，默认0）
+- 新增 `scrollSpeed`（uint8_t，默认80）
+- `brightness` 默认改为 0
+- `brightDim` 默认改为 1
+> ⚠️ 配置结构已变更，首次刷新后 EEPROM 自动重置为默认值，需重新配置。

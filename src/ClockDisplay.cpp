@@ -20,25 +20,21 @@ uint32_t mkRgb(uint8_t r, uint8_t g, uint8_t b) {
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }
 
-// OWM condition code → bar colour.
-// Groups per openweathermap.org/weather-conditions:
-//   2xx Thunderstorm | 3xx Drizzle | 5xx Rain | 6xx Snow
-//   7xx Atmosphere (fog/mist/haze/dust/…)
-//   800 Clear | 801-802 Few/Scattered clouds | 803-804 Broken/Overcast
+// OWM condition code → bar colour
 uint32_t wxColor(int16_t code) {
-    if (code == 0)                  return 0x444444;            // no data: dim grey
-    if (code >= 200 && code < 300)  return mkRgb(160,  0, 200); // Thunderstorm: purple
-    if (code >= 300 && code < 400)  return mkRgb( 80,140, 255); // Drizzle: light blue
-    if (code >= 500 && code < 600)  return mkRgb(  0, 60, 255); // Rain: blue
-    if (code >= 600 && code < 700)  return mkRgb(160,200, 255); // Snow: icy blue
-    if (code >= 700 && code < 800)  return mkRgb(120,120, 120); // Atmosphere: grey
-    if (code == 800)                return mkRgb(255,200,   0); // Clear: yellow
-    if (code >= 801 && code <= 802) return mkRgb(180,180,  60); // Few/scattered: pale yellow
-    if (code >= 803 && code <= 804) return mkRgb(140,140, 140); // Broken/overcast: grey
+    if (code == 0)                  return 0x444444;
+    if (code >= 200 && code < 300)  return mkRgb(160,  0, 200); // Thunderstorm
+    if (code >= 300 && code < 400)  return mkRgb( 80,140, 255); // Drizzle
+    if (code >= 500 && code < 600)  return mkRgb(  0, 60, 255); // Rain
+    if (code >= 600 && code < 700)  return mkRgb(160,200, 255); // Snow
+    if (code >= 700 && code < 800)  return mkRgb(120,120, 120); // Atmosphere
+    if (code == 800)                return mkRgb(255,200,   0); // Clear
+    if (code >= 801 && code <= 802) return mkRgb(180,180,  60); // Few/scattered
+    if (code >= 803 && code <= 804) return mkRgb(140,140, 140); // Broken/overcast
     return C_WHITE;
 }
 
-// ─── Internal: current time from NTP or manual drift ─────────────────────
+// ─── Internal: current time ───────────────────────────────────────────────
 static bool getCurrentTime(struct tm &t) {
     if (ntpSynced) {
         time_t now = time(nullptr);
@@ -53,20 +49,48 @@ static bool getCurrentTime(struct tm &t) {
     return false;
 }
 
-// ─── Internal: orientation remapping ─────────────────────────────────────
+// ─── Orientation: rotation + flip applied independently ──────────────────
+// curRotation: 0=0°  1=90°CW  2=180°  3=270°CW
+// curFlip:     0=none  1=H-flip  2=V-flip
+//
+// For each destination pixel (r,c), we look up the source pixel after
+// applying rotation (with scaling for the non-square 8×32 matrix) then flip.
 static void applyOrientation(uint32_t src[MATRIX_HEIGHT][MATRIX_WIDTH],
                               uint32_t dst[MATRIX_HEIGHT][MATRIX_WIDTH]) {
-    for (int r = 0; r < MATRIX_HEIGHT; r++)
+    for (int r = 0; r < MATRIX_HEIGHT; r++) {
         for (int c = 0; c < MATRIX_WIDTH; c++) {
-            uint32_t px;
-            switch (curOrientation) {
-                case 2:  px = src[MATRIX_HEIGHT-1-r][MATRIX_WIDTH-1-c]; break;
-                case 4:  px = src[r][MATRIX_WIDTH-1-c];                 break;
-                case 5:  px = src[MATRIX_HEIGHT-1-r][c];                break;
-                default: px = src[r][c];                                break;
+            int sr, sc;
+
+            // ── Step 1: rotation ──────────────────────────────────────────
+            switch (curRotation) {
+                case 1:  // 90°CW  (src cols → rows, scaled for non-square)
+                    sr = constrain((MATRIX_WIDTH-1-c) * MATRIX_HEIGHT / MATRIX_WIDTH,
+                                   0, MATRIX_HEIGHT-1);
+                    sc = constrain(r * MATRIX_WIDTH / MATRIX_HEIGHT,
+                                   0, MATRIX_WIDTH-1);
+                    break;
+                case 2:  // 180°
+                    sr = MATRIX_HEIGHT-1-r;
+                    sc = MATRIX_WIDTH-1-c;
+                    break;
+                case 3:  // 270°CW
+                    sr = constrain(c * MATRIX_HEIGHT / MATRIX_WIDTH,
+                                   0, MATRIX_HEIGHT-1);
+                    sc = constrain((MATRIX_HEIGHT-1-r) * MATRIX_WIDTH / MATRIX_HEIGHT,
+                                   0, MATRIX_WIDTH-1);
+                    break;
+                default: // 0° — no rotation
+                    sr = r; sc = c;
+                    break;
             }
-            dst[r][c] = px;
+
+            // ── Step 2: flip (applied on top of rotation) ─────────────────
+            if (curFlip == 1) sc = MATRIX_WIDTH-1-sc;   // H-Flip
+            if (curFlip == 2) sr = MATRIX_HEIGHT-1-sr;  // V-Flip
+
+            dst[r][c] = src[sr][sc];
         }
+    }
 }
 
 // ─── Primitives ──────────────────────────────────────────────────────────
@@ -74,7 +98,6 @@ void clearDisplay() {
     memset(displayMatrix, 0, sizeof(displayMatrix));
 }
 
-// Draws one character at column x.  Returns its pixel width (caller adds +1 gap).
 int drawChar(char c, int x, uint32_t color) {
     const uint8_t* fd = getCharFontData(c);
     uint8_t w = getCharWidth(c);
@@ -89,30 +112,25 @@ int drawChar(char c, int x, uint32_t color) {
     return (int)w;
 }
 
-// Total pixel width of a string (no trailing gap on the last character).
 int strPxW(const char* s) {
     int w = 0;
     for (int i = 0; s[i]; i++) w += (int)getCharWidth(s[i]) + 1;
     return (w > 0) ? w - 1 : 0;
 }
 
-// Draws string at x; returns x after last char + gap.
 int drawStr(const char* s, int x, uint32_t color) {
     for (int i = 0; s[i]; i++) x += drawChar(s[i], x, color) + 1;
     return x;
 }
 
-// Scrolling text — advances the global scrollOff by 1 each call.
-// Caller must call clearDisplay() first and respect SCROLL_FRAME_MS rate.
 void drawScroll(const char* txt, uint32_t color) {
     int txtW   = strPxW(txt);
-    int totalW = MATRIX_WIDTH + txtW + 8;   // 8-px pause between repeats
+    int totalW = MATRIX_WIDTH + txtW + 8;
     int x      = MATRIX_WIDTH - scrollOff;
     for (int i = 0; txt[i]; i++) x += drawChar(txt[i], x, color) + 1;
     if (++scrollOff >= totalW) scrollOff = 0;
 }
 
-// Push displayMatrix → physical LED strip (orientation + snake-map).
 void flushDisplay() {
     uint32_t oriented[MATRIX_HEIGHT][MATRIX_WIDTH];
     applyOrientation(displayMatrix, oriented);
@@ -128,7 +146,6 @@ void flushDisplay() {
 
 // ─── Faces ───────────────────────────────────────────────────────────────
 
-// CLOCK: HH:MM digits + 3 info bar columns
 void drawClockFace() {
     struct tm t = {};
     if (!getCurrentTime(t)) return;
@@ -136,7 +153,6 @@ void drawClockFace() {
     int hr = configManager.data.use24h ? t.tm_hour : (t.tm_hour % 12 ?: 12);
     char d[5]; snprintf(d, sizeof(d), "%02d%02d", hr, t.tm_min);
 
-    // HH:MM block — cols 0-24
     int x = 0;
     x += drawChar(d[0], x, C_WHITE) + 1;
     x += drawChar(d[1], x, C_WHITE) + 1;
@@ -144,21 +160,20 @@ void drawClockFace() {
     x += drawChar(d[2], x, C_WHITE) + 1;
          drawChar(d[3], x, C_WHITE);
 
-    // Info bars (bottom-up; row index MATRIX_HEIGHT-1 is the bottom row)
     int mday = t.tm_mday;
-    int wday = (t.tm_wday == 0) ? 7 : t.tm_wday;  // 0=Sun→7, 1=Mon..6=Sat
+    int wday = (t.tm_wday == 0) ? 7 : t.tm_wday;
 
-    // Col 26: DATE bar — 1 px per 7-day week of month (1-5 px), white
+    // Col 26: DATE bar (1 px per 7-day week, white)
     int wom = constrain((mday - 1) / 7 + 1, 1, 5);
     for (int i = 0; i < wom; i++)
         displayMatrix[MATRIX_HEIGHT - 1 - i][26] = C_WHITE;
 
-    // Col 28: WEEKDAY bar — Mon=1..Sun=7 px; orange weekend, cyan weekday
+    // Col 28: WEEKDAY bar (Mon=1..Sun=7 px, cyan weekday / orange weekend)
     uint32_t wdCol = (wday >= 6) ? C_ORANGE : C_CYAN;
     for (int i = 0; i < wday; i++)
         displayMatrix[MATRIX_HEIGHT - 1 - i][28] = wdCol;
 
-    // Col 30: WEATHER bar — 4 px, colour = OWM condition group
+    // Col 30: WEATHER bar (4 px, condition colour)
     if (weatherEnabled && weatherCode != 0) {
         uint32_t wxc = wxColor(weatherCode);
         for (int i = 0; i < 4; i++)
@@ -166,7 +181,6 @@ void drawClockFace() {
     }
 }
 
-// DATE: static "22APR" centred
 void drawDateFace() {
     static const char* MON[] = {
         "JAN","FEB","MAR","APR","MAY","JUN",
@@ -180,7 +194,6 @@ void drawDateFace() {
     drawStr(s, max(0, (MATRIX_WIDTH - w) / 2), C_GREEN);
 }
 
-// TEMP: static temperature or "WX OFF"
 void drawTempFace() {
     char s[12];
     if (weatherEnabled && weatherCode != 0)
@@ -191,7 +204,6 @@ void drawTempFace() {
     drawStr(s, max(0, (MATRIX_WIDTH - w) / 2), C_YELLOW);
 }
 
-// IP: scrolling WiFi IP address
 void drawIPFace() {
     static char          ipBuf[40]  = "NO WIFI";
     static unsigned long tIpCache   = 0;
