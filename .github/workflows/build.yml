@@ -139,18 +139,6 @@ jobs:
 
 # ════════════════════════════════════════════════════════════════════
 # Job 3: Build Firmware
-#
-# Cache layers (fast → slow to rebuild):
-#   A) pip              ~/.cache/pip
-#   B) pio toolchain    ~/.platformio/.packages + .tools   (~300 MB, rarely changes)
-#   C) pio libraries    ~/.platformio/lib                  (framework + its node_modules)
-#
-# Why node_modules lives in the lib cache:
-#   The ESP8266 IoT Framework ships a React/Webpack GUI. Its preBuildHTML.py
-#   calls `npm ci` only when node_modules is ABSENT. We run `npm install`
-#   (no package-lock.json required) right after pio installs the library,
-#   before `pio run` triggers preBuildHTML.py. On cache-hit the lib/ folder
-#   already contains node_modules → preBuildHTML.py skips npm entirely.
 # ════════════════════════════════════════════════════════════════════
   build:
     name: Build Firmware
@@ -164,7 +152,6 @@ jobs:
       contents: write
 
     steps:
-      # ── Source ────────────────────────────────────────────────────
       - name: Checkout code (post-patch)
         uses: actions/checkout@v4
         with:
@@ -175,7 +162,6 @@ jobs:
       - name: Pull latest (picks up patch commit if any)
         run: git pull --rebase origin ${{ github.ref_name }} || true
 
-      # ── Python / pip ──────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -191,47 +177,39 @@ jobs:
       - name: Install PlatformIO + Python deps
         run: pip install --upgrade pip platformio asn1crypto
 
-      # ── PlatformIO toolchain (compiler, SDK) ──────────────────────
+      # BUG FIX: PlatformIO uses 'packages', not '.packages'.
       - name: Cache PlatformIO toolchain
         uses: actions/cache@v4
         with:
           path: |
-            ~/.platformio/.packages
-            ~/.platformio/.tools
+            ~/.platformio/packages
+            ~/.platformio/platforms
           key: pio-toolchain-${{ runner.os }}-espressif8266@3.0.0
           restore-keys: pio-toolchain-${{ runner.os }}-
 
-      # ── PlatformIO libraries (framework + deps) ───────────────────
+      # BUG FIX: Project libraries live in .pio/libdeps, not ~/.platformio/lib.
       - name: Cache PlatformIO libraries (includes framework node_modules)
         id: pio_lib_cache
         uses: actions/cache@v4
         with:
-          path: ~/.platformio/lib
-          # Key: platformio.ini controls which libs are installed;
-          # JSON files control whether REBUILD_HTML/CONFIG/DASHBOARD regenerates.
+          path: .pio/libdeps
           key: pio-lib-${{ runner.os }}-${{ hashFiles('platformio.ini', 'gui/js/configuration.json', 'gui/js/dashboard.json') }}
           restore-keys: |
             pio-lib-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
             pio-lib-${{ runner.os }}-
 
-      # ── Install libraries (fast when cache hits) ──────────────────
       - name: Install PlatformIO platform & libraries
         run: pio pkg install --environment d1_mini
 
-      # ── Node.js / npm ─────────────────────────────────────────────
       - name: Set up Node.js 18
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
+      # BUG FIX: Searching .pio/libdeps for the framework's package.json.
       - name: Install npm deps in framework (pre-empts preBuildHTML npm ci)
-        # The ESP8266 IoT Framework's preBuildHTML.py checks:
-        #   if not os.path.isdir("../node_modules"): call("npm ci ...")
-        # Since package-lock.json is gitignored we cannot use `npm ci`.
-        # We run `npm install` (no lock file needed) which populates
-        # node_modules; preBuildHTML.py then skips npm entirely.
         run: |
-          FW_DIR=$(find ~/.platformio/lib -maxdepth 3 -name "package.json" \
+          FW_DIR=$(find .pio/libdeps -maxdepth 3 -name "package.json" \
                    ! -path "*/node_modules/*" 2>/dev/null | head -1 | xargs -r dirname)
 
           if [ -z "$FW_DIR" ]; then
@@ -239,7 +217,7 @@ jobs:
             exit 0
           fi
 
-          echo "Framework: $FW_DIR"
+          echo "Framework found at: $FW_DIR"
 
           if [ -d "$FW_DIR/node_modules" ]; then
             echo "✅ node_modules already present (cache hit) — skipping npm install"
@@ -250,7 +228,6 @@ jobs:
             echo "✅ npm install complete"
           fi
 
-      # ── PlatformIO build artifacts (.o files) ─────────────────────
       - name: Cache PlatformIO build artifacts
         uses: actions/cache@v4
         with:
@@ -260,14 +237,9 @@ jobs:
             pio-build-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
             pio-build-${{ runner.os }}-
 
-
-
-
-      # ── Firmware build ────────────────────────────────────────────
       - name: Build firmware (d1_mini)
         run: pio run -e d1_mini
 
-      # ── Artifact ──────────────────────────────────────────────────
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
@@ -275,7 +247,6 @@ jobs:
           path: .pio/build/d1_mini/firmware.bin
           retention-days: 30
 
-      # ── Release (main branch only) ────────────────────────────────
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         env:
@@ -291,7 +262,7 @@ jobs:
           echo "✅ Release $TAG created"
 
 # ════════════════════════════════════════════════════════════════════
-# Job 4: Cleanup (main branch only, after successful build)
+# Job 4: Cleanup
 # ════════════════════════════════════════════════════════════════════
   cleanup:
     name: Cleanup Old Releases & Runs
