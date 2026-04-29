@@ -10,14 +10,15 @@
 | Signal         | GPIO | D1 Mini pin | Notes |
 |----------------|------|-------------|-------|
 | BTN1 MODE      | 5    | D1          | INPUT_PULLUP, active LOW |
-| BTN2 UP        | 14   | D5          | INPUT_PULLUP, active LOW (new in v1.005) |
-| BTN3 DOWN      | 12   | D6          | INPUT_PULLUP, active LOW (new in v1.005) |
+| BTN2 UP        | 14   | D5          | INPUT_PULLUP, active LOW |
+| BTN3 DOWN      | 12   | D6          | INPUT_PULLUP, active LOW |
+| BTN4 CONFIRM   | 13   | D7          | INPUT_PULLUP, active LOW ← **new in v1.007** |
 | Onboard LED    | 2    | D4          | Active LOW (built-in) |
 | WS2812 data    | 4    | D2          | |
 | Matrix         | 32 × 8 = 256 LEDs, column-snake order ||
-| Power          | USB 5 V smartphone charger (220 V → 5 V) ||
+| Power          | USB 5 V smartphone charger ||
 
-> **Wiring BTN2 / BTN3**: connect one terminal to the GPIO pin, the other terminal to GND.
+> **Wiring BTN2 / BTN3 / BTN4**: connect one terminal to the GPIO pin, the other terminal to GND.
 > The internal pull-up is enabled automatically; no external resistor is needed.
 
 ---
@@ -47,14 +48,14 @@ Col 31     trailing pad
 
 ## Display modes
 
-Press **BTN1 (MODE)** to cycle through four display modes:
+Press **BTN1 (MODE)** to cycle through four display modes (LED refreshes immediately on switch):
 
 | Mode  | Content | Colour |
 |-------|---------|--------|
 | CLOCK | HH:MM + info bars (default) | White + colour bars |
-| IP    | Scrolling WiFi IP address, e.g. `IP 192.168.1.54` | Cyan |
-| DATE  | Static date, e.g. `22 APR` | Green |
+| DATE  | Static date, e.g. `22APR` | Green |
 | TEMP  | Static temperature, e.g. `25.1C` | Yellow |
+| IP    | Scrolling WiFi IP address | Cyan |
 
 After WiFi connects at boot, IP mode is shown automatically for 8 seconds, then returns to CLOCK.
 
@@ -62,18 +63,78 @@ After WiFi connects at boot, IP mode is shown automatically for 8 seconds, then 
 
 ## Button reference
 
-| Button | Press type | Action |
-|--------|-----------|--------|
-| **BTN1 MODE** (D1) | Single click | Cycle display mode: CLOCK → IP → DATE → TEMP → CLOCK |
-| **BTN1 MODE** (D1) | Double click | Force NTP + weather refresh immediately |
-| **BTN1 MODE** (D1) | Hold 1 s | Show IP address for 8 s |
-| **BTN1 MODE** (D1) | Hold 5 s | Enter recovery mode |
-| **BTN2 UP** (D5) | Single click | Brightness +1 step (Dim → Medium → Bright, wraps) |
-| **BTN2 UP** (D5) | Hold 1 s | Force NTP + weather refresh |
-| **BTN3 DOWN** (D6) | Single click | Brightness −1 step (Bright → Medium → Dim, wraps) |
-| **BTN3 DOWN** (D6) | Hold 1 s | Toggle weather fetch on / off |
+| Button | Press type | Normal mode | Settings mode | Recovery mode |
+|--------|-----------|-------------|---------------|---------------|
+| **BTN1 MODE** (D1) | Single click | Cycle display mode | Next setting item | — |
+| **BTN1 MODE** (D1) | Hold 3 s | Enter settings mode | Save & exit | Clear flag & reboot |
+| **BTN1 MODE** (D1) | Hold 8 s | Enter recovery mode | Save + enter recovery | — |
+| **BTN2 UP** (D5) | Single click | Brightness +1 step | Value +1 | — |
+| **BTN2 UP** (D5) | Hold 3 s | Force NTP + weather refresh | Value +5 (fast) | — |
+| **BTN3 DOWN** (D6) | Single click | Brightness −1 step | Value −1 | — |
+| **BTN3 DOWN** (D6) | Hold 3 s | Toggle weather on/off | Value −5 (fast) | — |
+| **BTN4 CONFIRM** (D7) | Single click | Show IP for 8 s | **Save** & exit | Clear flag & reboot |
+| **BTN4 CONFIRM** (D7) | Hold 3 s | — | **Cancel** (restore snapshot) | — |
 
-> **Note (boot window)**: Hold BTN1 during the first 3 seconds after power-on to enter recovery mode without waiting for the 5-second very-long-press.
+> **Boot window**: Hold BTN1 during the first 3 seconds after power-on to enter recovery mode.
+
+---
+
+## Settings mode
+
+Enter by holding **BTN1 MODE for 3 seconds**. The LED matrix shows the current setting in cyan.
+
+**Navigation:**
+- **BTN1 click** — move to next setting
+- **BTN2 UP click / hold** — increment value (+1 / +5)
+- **BTN3 DOWN click / hold** — decrement value (−1 / −5)
+- **BTN4 click** — **save** all changes and exit
+- **BTN4 hold 3 s** — **cancel** (restores the snapshot taken when settings was entered; nothing is saved)
+- **BTN1 hold 3 s** — save and exit
+- Auto-save after 30 seconds of inactivity
+
+**Available settings** (NTP-synced time/date items are hidden when clock is synced):
+
+| LED label | Setting | Range |
+|-----------|---------|-------|
+| `H:` | Manual hour | 0–23 |
+| `m:` | Manual minute | 0–59 |
+| `d:` | Manual day | 1–31 |
+| `Mo:` | Manual month | 1–12 |
+| `Y:` | Manual year | 2024–2099 |
+| `Wd:` | Manual weekday | Mon–Sun |
+| `TZ:` | Timezone preset | 18 POSIX presets |
+| `RO:` | Rotation | N / 90 / 180 / 270 |
+| `FL:` | Flip | N / H / V |
+| `SP:` | Scroll speed (ms/col) | 30–200 (step 5) |
+| `DM:` | Dim PWM value | 1–200 (step 5) |
+| `MD:` | Medium PWM value | 1–255 (step 5) |
+| `BR:` | Bright PWM value | 1–255 (step 5) |
+| `Wx:` | Weather on/off | ON / OFF |
+| `Wi:` | WiFi on/off | ON / OFF |
+
+---
+
+## Display orientation
+
+Rotation and flip are **independent** and **combinable**:
+
+**Rotation** (`rotation` config field):
+| Value | Label | Description |
+|-------|-------|-------------|
+| 0 | Normal | Standard horizontal mount |
+| 1 | 90° CW | Portrait (scaled) |
+| 2 | 180° | Upside-down |
+| 3 | 270° CW | Portrait, other way |
+
+**Flip** (`flip` config field):
+| Value | Label | Description |
+|-------|-------|-------------|
+| 0 | None | No mirroring |
+| 1 | H-Flip | Mirror left-right |
+| 2 | V-Flip | Mirror top-bottom |
+
+Both can be set independently via the web Configuration page or the on-device settings mode.
+Examples: 180° + H-Flip = same visual as V-Flip; 90° CW + H-Flip = 90° CCW.
 
 ---
 
@@ -81,16 +142,28 @@ After WiFi connects at boot, IP mode is shown automatically for 8 seconds, then 
 
 | Condition     | OWM code range | LED colour  |
 |---------------|----------------|-------------|
-| Thunderstorm  | 200–232        | Purple      |
-| Drizzle       | 300–321        | Light blue  |
-| Rain          | 500–531        | Blue        |
-| Snow          | 600–622        | Icy blue    |
-| Fog / mist    | 700–781        | Grey        |
+| Thunderstorm  | 200–299        | Purple      |
+| Drizzle       | 300–399        | Light blue  |
+| Rain          | 500–599        | Blue        |
+| Snow          | 600–699        | Icy blue    |
+| Fog / mist    | 700–799        | Grey        |
 | Clear sky     | 800            | Yellow      |
 | Few/scattered clouds | 801–802 | Pale yellow |
 | Broken / overcast | 803–804   | Grey        |
 
 Full code list: <https://openweathermap.org/weather-conditions>
+
+---
+
+## Scroll speed
+
+The **scroll speed** (ms per column) controls how fast all scrolling text moves:
+- IP address display
+- RECOVERY mode text
+- Settings items that are wider than the matrix
+
+Default: **80 ms/column** (~12 columns/second).  
+Range: 30 ms (fast) – 200 ms (slow). Adjustable via web Configuration or on-device settings (`SP:`).
 
 ---
 
@@ -105,15 +178,13 @@ Full code list: <https://openweathermap.org/weather-conditions>
 
 ### Recovery mode
 Entered when:
-- BTN1 held ≥ 1 s during **boot window** (first 3 s)
-- BTN1 held ≥ 5 s **at any time**
+- BTN1 held during boot window (first 3 s)
+- BTN1 held ≥ 8 s at any time
 - Crash / watchdog reset detected at boot
-- Weather fetch fails 5 consecutive times (network errors only; config errors like
-  wrong API key or city name do **not** count)
+- Weather fetch fails 5 consecutive times (network errors only)
 
-Shows scrolling orange **RECOVERY** text. Starts open AP **LED-CLOCK** if WiFi
-unavailable. Web GUI available at device IP or `192.168.4.1`.
-**Exit by rebooting** (web button or power cycle).
+Shows scrolling orange **RECOVERY** text. Web GUI available at device IP or `192.168.4.1`.
+**Exit**: press BTN4 (CONFIRM) or hold BTN1 for 3 s → clears RTC flag and reboots.
 
 ### LED indicator
 | State                       | Pattern         |
@@ -170,71 +241,44 @@ The clock advances via `millis()` drift once saved.
 ### Boot sequence
 ```
 ================================
-  LED Matrix Clock  v1.005
+  LED Matrix Clock  v1.007
 ================================
-[Sys] Chip ID   : XXXXXXXX
-[Sys] SDK       : 3.0.x
-[Sys] Flash     : 4096 KB
-[Sys] Free heap : 45000 B
-[Sys] CPU freq  : 160 MHz
-[Sys] Reset     : Power On
-[Boot] Buttons: MODE=GPIO5  UP=GPIO14  DOWN=GPIO12
-[Boot] Config loaded
-[Boot] Brightness level 1 (raw=128) | Orientation 0
-[Boot] Boot window 3000ms — hold BTN1(D1) for recovery
-[Boot] crash=0 rtcFlag=0 btnHold=0  =>  recovery=0
-[WiFi] connected — IP 192.168.1.54
-[NTP] timezone = HKT-8
-[NTP] synced — 2025-04-22 12:00:00
+[Sys] Reset:Power On  Heap:45000B  CPU:160MHz
+[Boot] BTN MODE=GPIO5 UP=GPIO14 DOWN=GPIO12 CONFIRM=GPIO13
+[Boot] bright=0(raw=1) rot=0 flip=0 spd=80 wx=1 wifi=1
+[Boot] window 3000ms — hold BTN1(MODE) for recovery
+[Boot] crash=0 rtc=0 btn=0 → recovery=0
+[WiFi] IP 192.168.1.54
+[NTP] tz=HKT-8
+[NTP] synced 2025-04-22 12:00:00
 [Weather] fetching city=Hong Kong
-[Weather] OK  code=800  25.0°C  clear sky
-[Boot] complete — heap=38000B
+[Weather] OK code=800 25.0°C clear sky
+[Boot] done  heap=38000B
 ================================
 ```
 
 ### Heartbeat (every 60 s)
 ```
-[Heartbeat] 12:01:00 | heap=37500B | ntp=1 | wx=800 25.0C [on] | mode=clock | bright=1 | orient=0 | wifi=192.168.1.54
+[Heart] 12:01:00 heap=37500 ntp=1 wx=800 25.0C [on] app=NRM disp=clock bri=0 rot=0 flip=0 spd=80 wifi=192.168.1.54
 ```
-
-Field meanings:
-
-| Field | Meaning |
-|-------|---------|
-| `heap=37500B` | Free heap memory in bytes |
-| `ntp=1` | NTP synced (1=yes, 0=no / using manual time) |
-| `wx=800` | OpenWeatherMap condition code (800 = clear sky, see table above) |
-| `25.0C` | Temperature in Celsius |
-| `[on]` | Weather fetch enabled (`on`) or disabled (`off`) |
-| `mode=clock` | Current display mode (`clock` / `ip` / `date` / `temp`) |
-| `bright=1` | Brightness index (0=dim, 1=medium, 2=bright) |
-| `orient=0` | Display orientation (0=normal) |
-| `wifi=...` | WiFi IP address, `AP:192.168.4.1` in captive portal, `offline` if disconnected |
 
 ### Button events
 ```
-[Button] MODE click — display mode: ip
-[Button] UP click — brightness 2 (raw=255)
-[Button] DOWN click — brightness 1 (raw=128)
-[Button] DOWN 1 s — weather DISABLED
-[Button] MODE double-click — force NTP + weather refresh
-[Button] MODE 5 s — entering recovery
+[Btn] MODE click → date
+[Btn] MODE click → temp
+[Btn] MODE click → ip
+[Btn] CONFIRM → show IP
+[Btn] UP → bright 1(raw=128)
+[Btn] DOWN → bright 0(raw=1)
+[Btn] DOWN 3 s → weather OFF
+[Btn] MODE 3 s → settings
+[Settings] 1/13 TZ:HKT+8
+[Btn] CONFIRM click → save
+[Settings] saved — returning to normal
+[Btn] CONFIRM 3 s → cancel
+[Settings] cancelled — config restored (not saved)
+[Btn] MODE 8 s → recovery
 ```
-
----
-
-## Display orientation
-
-The **Configuration** page exposes a **Display Orientation** selector:
-
-| Value | Label              | Use case                         |
-|-------|--------------------|----------------------------------|
-| 0     | Normal             | Standard horizontal mount        |
-| 1     | 90° CW             | Portrait mount (scaled)          |
-| 2     | 180°               | Upside-down mount                |
-| 3     | 270° CW            | Portrait mount, other way (scaled) |
-| 4     | H-Flip             | Display wired from the right     |
-| 5     | V-Flip             | Display wired from the bottom    |
 
 ---
 
@@ -258,16 +302,11 @@ When an AI model (or any contributor) modifies files in this project,
 ### Rules for patch zips
 | Rule | Detail |
 |------|--------|
-| Naming | `update_NNN.zip` — sequential number or date (`update_003.zip`, `update_20260418.zip`) |
+| Naming | `update_NNN.zip` — sequential number or date |
 | Contents | Changed files only — **no `.github/`** (blocked by CI) |
 | Paths | Relative to repo root (`src/main.cpp` not `/home/user/src/main.cpp`) |
 | CHANGELOG | Update `zip_update/CHANGELOG.md` — first line controls build (`#!build` or `#!no-build`) |
 | Cleanup | Zip is deleted automatically after successful application |
-
-### ⚠️ GitHub Actions workflow files cannot be self-updated
-
-Any zip containing `.github/` is **rejected automatically** by the CI safety check.
-If `build.yml` itself needs changing, commit it directly outside the patch mechanism.
 
 ---
 
@@ -277,22 +316,27 @@ led-clock/
 ├── platformio.ini
 ├── .gitignore
 ├── gui/js/
-│   ├── configuration.json   ← edit to add/remove config fields
-│   └── dashboard.json       ← edit to add/remove dashboard fields
+│   ├── configuration.json   ← rotation/flip/scrollSpeed fields
+│   └── dashboard.json       ← live clock/weather/system display
 ├── zip_update/
 │   ├── patches/             ← place update_NNN.zip here
 │   ├── applied_patches.txt  ← auto-maintained log
 │   └── CHANGELOG.md         ← release notes for next patch
 └── src/
-    ├── main.cpp             ← application entry point (state machine + display logic)
-    ├── PinDefinitions.h     ← hardware pin assignments
+    ├── main.cpp             ← setup() + loop() + global state
+    ├── AppState.h           ← enums, constants, extern globals
+    ├── PinDefinitions.h     ← GPIO assignments (4 buttons + LED + matrix)
+    ├── BtnSimple.h          ← header-only 3-level button state machine
     ├── LEDMatrixLayout.h    ← column-snake physical mapping
-    ├── FontData.*           ← 5×7 pixel font (digits, A-Z, a-z, punctuation)
-    ├── ButtonHandler.*      ← debounced button state machine (3 instances used)
-    ├── StatusLED.*          ← onboard LED driver (unused directly; logic inline in main)
-    ├── TimeManager.*        ← NTP + manual time wrapper (unused directly; logic inline in main)
-    ├── WeatherService.*     ← OWM HTTP client (unused directly; logic inline in main)
-    ├── DisplayManager.*     ← FastLED matrix driver (unused directly; logic inline in main)
-    ├── ClockFace.*          ← digit renderer (unused directly; logic inline in main)
-    └── InfoColumns.*        ← bar renderer (unused directly; logic inline in main)
+    ├── FontData.*           ← 5×7 pixel font
+    ├── ClockDisplay.*       ← display primitives + face renderers
+    ├── SettingsMode.*       ← on-device settings editor (snapshot/cancel)
+    ├── WeatherFetch.*       ← OWM HTTP client + recovery trigger
+    ├── ButtonHandler.*      ← legacy (not used directly)
+    ├── StatusLED.*          ← legacy (not used directly)
+    ├── TimeManager.*        ← legacy (not used directly)
+    ├── WeatherService.*     ← legacy (not used directly)
+    ├── DisplayManager.*     ← legacy (not used directly)
+    ├── ClockFace.*          ← legacy (not used directly)
+    └── InfoColumns.*        ← legacy (not used directly)
 ```
