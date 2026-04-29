@@ -1,8 +1,5 @@
 name: Build & Release Firmware
 
-# ════════════════════════════════════════════════════════════════════
-# Trigger conditions
-# ════════════════════════════════════════════════════════════════════
 on:
   push:
     branches: [ '**' ]
@@ -49,21 +46,19 @@ jobs:
           else
             echo "patch_found=false" >> "$GITHUB_OUTPUT"
             echo "patch_path="       >> "$GITHUB_OUTPUT"
-            echo "ℹ️  No patch found — building current code"
+            echo "ℹ️  No patch found"
           fi
 
       - name: Decide actions
         id: decision
         run: |
           PATCH="${{ steps.find_patch.outputs.patch_found }}"
-          FORCE="${{ github.event.inputs.force_build }}"
           if [ "$PATCH" = "true" ]; then
             echo "should_apply=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_apply=false" >> "$GITHUB_OUTPUT"
           fi
           echo "compile_firmware=true" >> "$GITHUB_OUTPUT"
-          echo "Decision → patch=$PATCH force=$FORCE"
 
 # ════════════════════════════════════════════════════════════════════
 # Job 2: Apply Patch
@@ -88,51 +83,36 @@ jobs:
           PATCH_PATH: ${{ needs.check.outputs.patch_path }}
         run: |
           set -euo pipefail
-          echo "Extracting: $PATCH_PATH"
           mkdir -p _patch_tmp
           unzip -o "$PATCH_PATH" -d _patch_tmp
-
           if find _patch_tmp -type d -name '.github' | grep -q '.'; then
-            echo "❌ Patch contains .github/ — aborting for security"
-            exit 1
+            echo "❌ Patch contains .github/ — aborting"; exit 1
           fi
-
           rsync -av --exclude='.github' _patch_tmp/ .
           rm -rf _patch_tmp
           echo "✅ Patch extracted"
 
-      - name: Run apply.sh (optional post-patch hook)
+      - name: Run apply.sh (optional)
         run: |
           if [ -f "zip_update/patches/apply.sh" ]; then
-            echo "Running apply.sh..."
             chmod +x zip_update/patches/apply.sh
             bash zip_update/patches/apply.sh
-            echo "✅ apply.sh completed"
-          else
-            echo "No apply.sh found — skipping"
           fi
 
       - name: Commit patch results
         run: |
           PATCH_NAME=$(basename "${{ needs.check.outputs.patch_path }}" .zip)
-
           rm -f zip_update/patches/*.zip zip_update/patches/apply.sh
-
           echo "$PATCH_NAME" >> zip_update/applied_patches.txt
-          tail -n 50 zip_update/applied_patches.txt > /tmp/ap.txt \
-            && mv /tmp/ap.txt zip_update/applied_patches.txt
-
+          tail -n 50 zip_update/applied_patches.txt > /tmp/ap.txt && mv /tmp/ap.txt zip_update/applied_patches.txt
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-
           if ! git diff --cached --quiet; then
             NOTE=$(grep -v '^#' zip_update/CHANGELOG.md 2>/dev/null | head -80 || echo "")
             git commit -m "chore: apply patch $PATCH_NAME [skip ci] $NOTE"
             git push origin HEAD
             echo "✅ Committed and pushed"
-          else
-            echo "No changes to commit after patch"
           fi
 
 # ════════════════════════════════════════════════════════════════════
@@ -157,7 +137,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.ref }}
 
-      - name: Pull latest (picks up patch commit if any)
+      - name: Pull latest
         run: git pull --rebase origin ${{ github.ref_name }} || true
 
       - name: Set up Python 3.11
@@ -165,41 +145,36 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache pip packages
+      - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          key: pip-${{ runner.os }}-pio6
           restore-keys: pip-${{ runner.os }}-
 
-      - name: Install PlatformIO + Python deps
+      - name: Install PlatformIO
         run: pip install --upgrade pip platformio asn1crypto
 
-      # ── Toolchain cache (correct path, no leading dot) ────────────────────
+      # ── Toolchain: keyed on platform version only (very stable) ──────────
       - name: Cache PlatformIO toolchain
         uses: actions/cache@v4
         with:
           path: |
             ~/.platformio/packages
             ~/.platformio/platforms
-            ~/.platformio/python3
           key: pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-v3
-          restore-keys: |
-            pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-
-            pio-toolchain-${{ runner.os }}-
+          restore-keys: pio-toolchain-${{ runner.os }}-
 
-      # ── Library cache (project-local .pio/libdeps) ────────────────────────
-      - name: Cache PlatformIO libraries
-        id: pio_lib_cache
+      # ── Library downloads: keyed on platformio.ini ────────────────────────
+      # Restored before pkg install so git clones are skipped on cache hit.
+      - name: Cache PlatformIO library downloads
+        id: lib_cache
         uses: actions/cache@v4
         with:
           path: .pio/libdeps
-          key: pio-lib-${{ runner.os }}-${{ hashFiles('platformio.ini', 'gui/js/configuration.json', 'gui/js/dashboard.json') }}
-          restore-keys: |
-            pio-lib-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-            pio-lib-${{ runner.os }}-
+          key: pio-libdeps-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-libdeps-${{ runner.os }}-
 
-      # Single install step — handles both platform + libraries
       - name: Install PlatformIO platform & libraries
         run: pio pkg install --environment d1_mini
 
@@ -208,63 +183,56 @@ jobs:
         with:
           node-version: '18'
 
-      # ── npm pre-install ───────────────────────────────────────────────────
-      # The framework directory is named "ESP8266 IoT Framework" (contains spaces).
-      # We must use find -print0 / read -d '' to handle the name correctly —
-      # never pipe through xargs dirname which splits on whitespace.
-      - name: Install npm deps in framework
-        run: |
-          set -euo pipefail
-
-          # Locate the framework directory directly (maxdepth 1 = immediate subdir)
-          FW_DIR=""
-          while IFS= read -r -d '' dir; do
-            if [ -f "$dir/package.json" ]; then
-              FW_DIR="$dir"
-              break
-            fi
-          done < <(find .pio/libdeps/d1_mini -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
-
-          if [ -z "$FW_DIR" ]; then
-            echo "⚠️  No package.json found under .pio/libdeps/d1_mini — skipping npm pre-install"
-            echo "    (PlatformIO will run npm ci automatically during build)"
-            exit 0
-          fi
-
-          echo "Framework found at: $FW_DIR"
-
-          if [ -d "$FW_DIR/node_modules" ]; then
-            echo "✅ node_modules already present (cache hit) — skipping npm install"
-          else
-            echo "📦 Running npm install --legacy-peer-deps"
-            cd "$FW_DIR"
-            npm install --legacy-peer-deps
-            echo "✅ npm install complete"
-          fi
-
-      # Cache node_modules so the next run skips npm entirely.
-      # Use a stable path glob that survives the space in the dir name.
+      # ── npm: framework node_modules ───────────────────────────────────────
+      # Dir name "ESP8266 IoT Framework" has spaces — use null-delimiter find.
       - name: Cache framework node_modules
+        id: npm_cache
         uses: actions/cache@v4
         with:
           path: .pio/libdeps/d1_mini/ESP8266 IoT Framework/node_modules
           key: npm-fw-${{ runner.os }}-${{ hashFiles('.pio/libdeps/d1_mini/ESP8266 IoT Framework/package.json') }}
           restore-keys: npm-fw-${{ runner.os }}-
 
-      - name: Cache PlatformIO build artifacts
+      - name: Install npm deps in framework
+        if: steps.npm_cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          FW_DIR=""
+          while IFS= read -r -d '' dir; do
+            if [ -f "$dir/package.json" ]; then FW_DIR="$dir"; break; fi
+          done < <(find .pio/libdeps/d1_mini -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
+
+          if [ -z "$FW_DIR" ]; then
+            echo "⚠️  Framework package.json not found — PlatformIO will run npm ci during build"
+            exit 0
+          fi
+
+          echo "📦 npm install in: $FW_DIR"
+          cd "$FW_DIR"
+          npm install --legacy-peer-deps
+          echo "✅ npm install complete"
+
+      # ── Build object cache: keyed on platformio.ini ONLY (not src/**) ─────
+      #
+      # KEY DESIGN: by NOT including src/** in the cache key, library .o files
+      # survive across your source code changes. On a cache hit, PlatformIO still
+      # runs but only recompiles files that actually changed — skipping the
+      # 60-90 seconds of library compilation (ESP8266SdFat, framework, etc).
+      #
+      # The cache is only fully invalidated when platformio.ini changes
+      # (i.e. you add/remove/upgrade a library).
+      - name: Cache PlatformIO build objects
         uses: actions/cache@v4
         with:
           path: .pio/build/d1_mini
-          key: pio-build-${{ runner.os }}-${{ hashFiles('src/**', 'platformio.ini', 'gui/js/configuration.json', 'gui/js/dashboard.json') }}
-          restore-keys: |
-            pio-build-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-            pio-build-${{ runner.os }}-
+          key: pio-build-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-build-${{ runner.os }}-
 
-      - name: Build firmware (d1_mini)
+      - name: Build firmware
         run: pio run -e d1_mini
 
-      # NOTE: no buildfs step — the web UI is embedded in PROGMEM (html.h),
-      # so there is no data/ directory and no filesystem image to build.
+      # NOTE: no buildfs step — web UI is embedded in PROGMEM (html.h).
+      # This project has no data/ directory.
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
@@ -279,8 +247,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v$(date +%Y.%m%d.%H%M)"
-          BODY=$(grep -v '^#' zip_update/CHANGELOG.md 2>/dev/null \
-                 || echo "Automated firmware build")
+          BODY=$(grep -v '^#' zip_update/CHANGELOG.md 2>/dev/null || echo "Automated firmware build")
           gh release create "$TAG" \
             --title "Firmware $TAG" \
             --notes "$BODY" \
@@ -309,10 +276,8 @@ jobs:
           REPO:     ${{ github.repository }}
           KEEP:     "10"
         run: |
-          echo "── Cleaning up old releases ──────────────────────────────"
           RELEASE_IDS=$(gh api "repos/$REPO/releases" --paginate --jq '.[].id' 2>/dev/null || echo "")
           TOTAL=$(echo "$RELEASE_IDS" | grep -c . 2>/dev/null || echo 0)
-
           if [ "$TOTAL" -le "$KEEP" ]; then
             echo "Only $TOTAL releases — nothing to delete"
           else
@@ -320,12 +285,8 @@ jobs:
               [ -z "$rid" ] && continue
               TAG=$(gh api "repos/$REPO/releases/$rid" --jq '.tag_name' 2>/dev/null || echo "")
               gh api --method DELETE "repos/$REPO/releases/$rid" \
-                && echo "  ✅ Deleted release $rid (${TAG})" \
-                || echo "  ⚠️  Failed to delete release $rid"
-              if [ -n "$TAG" ]; then
-                gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG" 2>/dev/null \
-                  && echo "     🏷️  Deleted tag $TAG"
-              fi
+                && echo "✅ Deleted release $rid ($TAG)" || true
+              [ -n "$TAG" ] && gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG" 2>/dev/null || true
             done
           fi
 
@@ -335,21 +296,14 @@ jobs:
           REPO:     ${{ github.repository }}
           KEEP:     "15"
         run: |
-          echo "── Cleaning up old workflow runs ─────────────────────────"
-          for WF_ID in $(gh api "repos/$REPO/actions/workflows" \
-                         --paginate --jq '.workflows[].id' 2>/dev/null); do
-            WF_NAME=$(gh api "repos/$REPO/actions/workflows/$WF_ID" \
-                      --jq '.name' 2>/dev/null || echo "id=$WF_ID")
+          for WF_ID in $(gh api "repos/$REPO/actions/workflows" --paginate --jq '.workflows[].id' 2>/dev/null); do
             RUN_IDS=$(gh api "repos/$REPO/actions/workflows/$WF_ID/runs" \
                         --paginate --jq '.workflow_runs[].id' 2>/dev/null | head -200)
             TOTAL=$(echo "$RUN_IDS" | grep -c . 2>/dev/null || echo 0)
             [ "$TOTAL" -le "$KEEP" ] && continue
-            echo "  Workflow: $WF_NAME — deleting $((TOTAL - KEEP)) old run(s)"
             echo "$RUN_IDS" | tail -n "+$((KEEP + 1))" | while read -r run_id; do
               [ -z "$run_id" ] && continue
-              gh api --method DELETE "repos/$REPO/actions/runs/$run_id" 2>/dev/null \
-                && echo "    ✅ Deleted run $run_id" \
-                || echo "    ⚠️  Failed run $run_id"
+              gh api --method DELETE "repos/$REPO/actions/runs/$run_id" 2>/dev/null || true
             done
           done
           echo "=== Cleanup done ==="
