@@ -155,7 +155,7 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade pip platformio asn1crypto
 
-      # ── Toolchain: keyed on platform version only (very stable) ──────────
+      # ── Toolchain cache ───────────────────────────────────────────────────
       - name: Cache PlatformIO toolchain
         uses: actions/cache@v4
         with:
@@ -165,8 +165,7 @@ jobs:
           key: pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-v3
           restore-keys: pio-toolchain-${{ runner.os }}-
 
-      # ── Library downloads: keyed on platformio.ini ────────────────────────
-      # Restored before pkg install so git clones are skipped on cache hit.
+      # ── Library downloads cache ───────────────────────────────────────────
       - name: Cache PlatformIO library downloads
         id: lib_cache
         uses: actions/cache@v4
@@ -183,8 +182,6 @@ jobs:
         with:
           node-version: '18'
 
-      # ── npm: framework node_modules ───────────────────────────────────────
-      # Dir name "ESP8266 IoT Framework" has spaces — use null-delimiter find.
       - name: Cache framework node_modules
         id: npm_cache
         uses: actions/cache@v4
@@ -212,27 +209,22 @@ jobs:
           npm install --legacy-peer-deps
           echo "✅ npm install complete"
 
-      # ── Build object cache: keyed on platformio.ini ONLY (not src/**) ─────
-      #
-      # KEY DESIGN: by NOT including src/** in the cache key, library .o files
-      # survive across your source code changes. On a cache hit, PlatformIO still
-      # runs but only recompiles files that actually changed — skipping the
-      # 60-90 seconds of library compilation (ESP8266SdFat, framework, etc).
-      #
-      # The cache is only fully invalidated when platformio.ini changes
-      # (i.e. you add/remove/upgrade a library).
+      # ── Build object cache ────────────────────────────────────────────────
+      # PLATFORMIO_BUILD_CACHE_DIR points PlatformIO at a stable, versioned
+      # cache directory that persists across runs.  This is the fix for the
+      # ".pio won't use cache" warning — PlatformIO requires this env var to
+      # activate its shared build cache; the .pio/build dir alone is not enough.
       - name: Cache PlatformIO build objects
         uses: actions/cache@v4
         with:
-          path: .pio/build/d1_mini
-          key: pio-build-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-build-${{ runner.os }}-
+          path: ~/.pio/build_cache
+          key: pio-build-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}-v1
+          restore-keys: pio-build-cache-${{ runner.os }}-
 
       - name: Build firmware
+        env:
+          PLATFORMIO_BUILD_CACHE_DIR: ~/.pio/build_cache
         run: pio run -e d1_mini
-
-      # NOTE: no buildfs step — web UI is embedded in PROGMEM (html.h).
-      # This project has no data/ directory.
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
