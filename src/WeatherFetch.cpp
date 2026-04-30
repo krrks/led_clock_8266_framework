@@ -49,7 +49,7 @@ void fetchWeather() {
     if (http.begin(client, url)) {
         int code = http.GET();
         if (code == HTTP_CODE_OK) {
-            StaticJsonDocument<1024> doc;
+            JsonDocument doc;
             if (!deserializeJson(doc, http.getStream())) {
                 weatherCode = (int16_t)(doc["weather"][0]["id"] | 0);
                 weatherTemp = doc["main"]["temp"] | 0.0f;
