@@ -7,8 +7,8 @@
 #include "PinDefinitions.h"
 
 #include <ESP8266WiFi.h>
-#include "WiFiManager.h"
-#include "configManager.h"
+#include "wifi/WiFiService.h"
+#include "config/ConfigManager.h"
 
 // ─── Colour constants ────────────────────────────────────────────────────
 const uint32_t C_WHITE  = 0xFFFFFF;

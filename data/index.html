@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LED Clock</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>LED Matrix Clock</h1>
+  <nav>
+    <button class="nav-btn active" onclick="showTab('dashboard')">Dashboard</button>
+    <button class="nav-btn" onclick="showTab('settings')">Settings</button>
+    <button class="nav-btn" onclick="showTab('pins')">Pins</button>
+    <button class="nav-btn" onclick="showTab('serial')">Serial</button>
+  </nav>
+  <div id="sysInfo" class="sys-info"></div>
+</header>
+
+<main>
+  <!-- Dashboard -->
+  <section id="dashboard" class="tab active">
+    <div class="dash-grid">
+      <div class="card"><h3>Time</h3><div class="big" id="dashTime">--:--:--</div></div>
+      <div class="card"><h3>Date</h3><div class="big" id="dashDate">----</div></div>
+      <div class="card"><h3>Weekday</h3><div class="big" id="dashWeekday">---</div></div>
+      <div class="card"><h3>NTP</h3><div id="dashNtp">---</div></div>
+      <div class="card"><h3>Temperature</h3><div class="big" id="dashTemp">--.-C</div></div>
+      <div class="card"><h3>Weather</h3><div id="dashWeather">---</div></div>
+      <div class="card"><h3>Free Heap</h3><div id="dashHeap">---</div></div>
+      <div class="card"><h3>Uptime</h3><div id="dashUptime">---</div></div>
+    </div>
+  </section>
+
+  <!-- Settings -->
+  <section id="settings" class="tab">
+    <div id="settingsForm" class="settings-grid"></div>
+    <button onclick="saveConfig()" class="btn-primary">Save Settings</button>
+    <div id="settingsStatus"></div>
+  </section>
+
+  <!-- Pins -->
+  <section id="pins" class="tab">
+    <table class="pin-table">
+      <thead><tr><th>GPIO</th><th>Name</th><th>Description</th><th>Mode</th></tr></thead>
+      <tbody id="pinTableBody"></tbody>
+    </table>
+  </section>
+
+  <!-- Serial Monitor -->
+  <section id="serial" class="tab">
+    <div id="serialTerm" class="serial-term"></div>
+    <input id="serialInput" placeholder="Type + Enter to send...">
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

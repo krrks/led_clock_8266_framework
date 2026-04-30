@@ -33,8 +33,24 @@
 #define STATUS_LED_PIN  2
 
 // ── WS2812B data (GPIO3 / RX / D9) — NeoPixelBus I2S DMA ───────────
-// The GPIO3 pin is hardwired inside NeoEsp8266Dma800KbpsMethod.
-// This constant is kept for documentation; do not pass it to FastLED.
 #define LED_MATRIX_PIN  3
+
+// ── Pin metadata table (for web settings display) ───────────────────
+struct PinDef {
+    uint8_t     gpio;
+    const char* name;
+    const char* description;
+    const char* mode;
+};
+
+static const PinDef pinTable[] = {
+    {  5, "BTN1",   "Mode / Select button",   "INPUT_PULLUP" },
+    { 14, "BTN2",   "Up / Brighter button",   "INPUT_PULLUP" },
+    { 12, "BTN3",   "Down / Dimmer button",   "INPUT_PULLUP" },
+    { 13, "BTN4",   "Confirm / Cancel button","INPUT_PULLUP" },
+    {  2, "LED",    "Status LED (onboard)",    "OUTPUT" },
+    {  3, "WS2812", "LED matrix data (I2S DMA)","I2S_DMA" },
+};
+#define PIN_TABLE_COUNT (sizeof(pinTable) / sizeof(pinTable[0]))
 
 #endif // PINDEFINITIONS_H

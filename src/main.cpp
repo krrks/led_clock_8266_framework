@@ -28,13 +28,12 @@
 #include <ESP8266WiFi.h>
 #include <time.h>
 
-// Framework
-#include "WiFiManager.h"
-#include "webServer.h"
-#include "updater.h"
-#include "configManager.h"
-#include "timeSync.h"
-#include "dashboard.h"
+// Infrastructure (replaces maakbaas/esp8266-iot-framework)
+#include "config/ConfigManager.h"
+#include "wifi/WiFiService.h"
+#include "ntp/NtpClient.h"
+#include "web/WebServer.h"
+#include "web/Dashboard.h"
 
 // Project
 #include "PinDefinitions.h"
@@ -45,6 +44,7 @@
 #include "ClockDisplay.h"
 #include "SettingsMode.h"
 #include "WeatherFetch.h"
+#include "recovery/RecoveryManager.h"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Global variable definitions  (declared extern in AppState.h / NeoStrip.h)
@@ -170,20 +170,19 @@ static void updateDashboard() {
     }
     if (!ok) return;
 
-    char tmp[20];
-    snprintf(tmp, sizeof(tmp), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
-    strlcpy(dash.data.currentTime, tmp, sizeof(dash.data.currentTime));
-    snprintf(tmp, sizeof(tmp), "%04d-%02d-%02d", t.tm_year+1900, t.tm_mon+1, t.tm_mday);
-    strlcpy(dash.data.currentDate, tmp, sizeof(dash.data.currentDate));
+    snprintf(dash.currentTime, sizeof(dash.currentTime),
+             "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+    snprintf(dash.currentDate, sizeof(dash.currentDate),
+             "%04d-%02d-%02d", t.tm_year+1900, t.tm_mon+1, t.tm_mday);
     static const char* WDN[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-    strlcpy(dash.data.weekday, WDN[t.tm_wday], sizeof(dash.data.weekday));
-    dash.data.ntpSynced   = ntpSynced;
-    dash.data.temperature = weatherTemp;
-    dash.data.weatherCode = (uint16_t)weatherCode;
-    strlcpy(dash.data.weatherDesc, weatherDesc, sizeof(dash.data.weatherDesc));
-    dash.data.freeHeap   = (uint32_t)ESP.getFreeHeap();
-    dash.data.uptime     = (uint32_t)(millis()/1000UL);
-    dash.data.inRecovery = (appMode == AM_RECOVERY);
+    strlcpy(dash.weekday, WDN[t.tm_wday], sizeof(dash.weekday));
+    dash.ntpSynced   = ntpSynced;
+    dash.temperature = weatherTemp;
+    dash.weatherCode = weatherCode;
+    strlcpy(dash.weatherDesc, weatherDesc, sizeof(dash.weatherDesc));
+    dash.freeHeap   = (uint32_t)ESP.getFreeHeap();
+    dash.uptime     = (uint32_t)(millis()/1000UL);
+    dash.inRecovery = (appMode == AM_RECOVERY);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -244,45 +243,30 @@ void setup() {
         }
         pendingRedraw = true;
         tLastActivity = millis();
-        Serial.printf("[Config] bright=%d rot=%d flip=%d spd=%d wx=%d\n",
-                      configManager.data.brightness,
-                      curRotation, curFlip, configManager.data.scrollSpeed,
-                      weatherEnabled);
     });
 
-    // ── Recovery detection ──────────────────────────────────────────────
-    String rsn = ESP.getResetReason();
-    bool crashReset = (rsn == "Exception" || rsn.indexOf("Watchdog") >= 0);
+    // ── Recovery Manager ────────────────────────────────────────────────
+    auto& recovery = RecoveryManager::get();
+    recovery.triggerPin   = BUTTON_1_PIN;
+    recovery.bootWindowMs = BOOT_WINDOW_MS;
+    recovery.staSSID      = configManager.data.wifiSSID;
+    recovery.staPassword  = configManager.data.wifiPassword;
+    recovery.begin();
 
-    RTCData rtc = {}; bool rtcFlag = false;
-    if (ESP.rtcUserMemoryRead(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc))) {
-        if (rtc.magic == RTC_MAGIC && rtc.enterRecovery == 1) {
-            rtcFlag = true;
-            rtc.enterRecovery = 0;
-            ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
-        }
+    if (recovery.isActive()) {
+        appMode = AM_RECOVERY;
+        wifiActive = true;
+        unsigned long now = millis();
+        tLastActivity = tLastNtp = tLastWeather = tLastDash = tLastHeart = now;
+        tLastDisplay  = 0;
+        digitalWrite(STATUS_LED_PIN, HIGH);
+        Serial.printf("[Boot] recovery mode active  heap=%uB\n================\n\n",
+                      ESP.getFreeHeap());
+        return;
     }
 
-    // ── Boot window: fast-blink, watch BTN1 ─────────────────────────────
-    bool bootHold = false;
-    Serial.printf("[Boot] window %lums — hold BTN1(MODE) for recovery\n", BOOT_WINDOW_MS);
-    unsigned long bootStart = millis();
-    while (millis() - bootStart < BOOT_WINDOW_MS) {
-        bool c, l, vl; btnMode.poll(c, l, vl);
-        if (l || vl) { bootHold = true; break; }
-        unsigned long n = millis();
-        if (n - tLedBlink >= 100) {
-            tLedBlink = n; ledBlinkState = !ledBlinkState;
-            digitalWrite(STATUS_LED_PIN, ledBlinkState ? LOW : HIGH);
-        }
-        delay(10); yield();
-    }
-    if (crashReset || rtcFlag || bootHold) appMode = AM_RECOVERY;
-    Serial.printf("[Boot] crash=%d rtc=%d btn=%d → recovery=%d\n",
-                  crashReset, rtcFlag, bootHold, appMode==AM_RECOVERY);
-
-    GUI.begin();
-    dash.begin(DASH_INT_MS);
+    webServer.begin();
+    dash.begin(&webServer.wsDashboard(), DASH_INT_MS);
 
     // ── WiFi ─────────────────────────────────────────────────────────────
     if (appMode == AM_RECOVERY || configManager.data.wifiEnabled) {
@@ -339,8 +323,15 @@ void setup() {
 // loop()
 // ─────────────────────────────────────────────────────────────────────────
 void loop() {
+    RecoveryManager::get().loop();   // web server + serial broadcast in recovery
+    if (RecoveryManager::get().isActive()) {
+        updateStatusLED();
+        delay(50);
+        return;  // RecoveryManager handles everything; skip normal loop
+    }
+
     if (wifiActive) WiFiManager.loop();
-    updater.loop();
+    // updater.loop();  // handled by webServer now
     configManager.loop();
     dash.loop();
 
@@ -357,7 +348,7 @@ void loop() {
 
     if (mClk||mLng||mVLng||uClk||uLng||uVLng||
         dClk||dLng||dVLng||cClk||cLng||cVLng)  tLastActivity = now;
-    if (wifiActive && GUI.ws.count() > 0)       tLastActivity = now;
+    if (wifiActive && webServer.wsDashboard().count() > 0) tLastActivity = now;
     bool isIdle = (now - tLastActivity > IDLE_TIMEOUT_MS);
 
     // ── Auto-return from IP ───────────────────────────────────────────────
@@ -440,19 +431,8 @@ void loop() {
             else if (cClk)  { Serial.println("[Btn] CONFIRM click → save"); saveAndExitSettings(); }
         }
     }
-    else {  // AM_RECOVERY
-        if (mLng || mVLng) {
-            Serial.println("[Recovery] BTN1 3 s → clear flag & reboot");
-            RTCData rtc = { RTC_MAGIC, 0 };
-            ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
-            delay(50); ESP.restart();
-        }
-        if (cClk) {
-            Serial.println("[Recovery] CONFIRM → clear flag & reboot");
-            RTCData rtc = { RTC_MAGIC, 0 };
-            ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
-            delay(50); ESP.restart();
-        }
+    else {  // AM_RECOVERY — handled by RecoveryManager; this branch is unreachable
+        // Use recovery web UI (/api/exit) or RecoveryManager to exit
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -505,7 +485,7 @@ void loop() {
     updateStatusLED();
 
     // Idle: ~20 Hz saves CPU; active: ~200 Hz keeps buttons snappy.
-    if (isIdle && (!wifiActive || GUI.ws.count() == 0) && appMode == AM_NORMAL)
+    if (isIdle && (!wifiActive || webServer.wsDashboard().count() == 0) && appMode == AM_NORMAL)
         delay(50);
     else
         delay(5);

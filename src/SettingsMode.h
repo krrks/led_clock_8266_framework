@@ -11,7 +11,7 @@
 //   auto-timeout 30 s      → save & exit
 
 #include <Arduino.h>
-#include "configManager.h"   // for configData type
+#include "config/ConfigManager.h"   // for configData type
 
 // Timezone preset list
 struct TzPreset { const char* label; const char* posix; };
