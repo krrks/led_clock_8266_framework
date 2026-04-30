@@ -6,8 +6,6 @@
 #include "configManager.h"
 #include "timeSync.h"
 
-#include <FastLED.h>
-
 // ─── Config snapshot (for cancel) ────────────────────────────────────────
 configData settingsSnapshot;
 

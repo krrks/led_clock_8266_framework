@@ -170,7 +170,7 @@ static void updateDashboard() {
     }
     if (!ok) return;
 
-    char tmp[16];
+    char tmp[20];
     snprintf(tmp, sizeof(tmp), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
     strlcpy(dash.data.currentTime, tmp, sizeof(dash.data.currentTime));
     snprintf(tmp, sizeof(tmp), "%04d-%02d-%02d", t.tm_year+1900, t.tm_mon+1, t.tm_mday);
@@ -476,6 +476,7 @@ void loop() {
                         case DM_DATE:  drawDateFace();  break;
                         case DM_TEMP:  drawTempFace();  break;
                         case DM_IP:    drawIPFace();    break;
+                        case DM_COUNT: break;
                     }
             }
             flushDisplay();
