@@ -3,8 +3,8 @@
 #include "AppState.h"
 #include "ClockDisplay.h"
 
-#include "configManager.h"
-#include "timeSync.h"
+#include "config/ConfigManager.h"
+#include "ntp/NtpClient.h"
 
 // ─── Config snapshot (for cancel) ────────────────────────────────────────
 configData settingsSnapshot;

@@ -162,7 +162,7 @@ jobs:
           path: |
             ~/.platformio/packages
             ~/.platformio/platforms
-          key: pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-v3
+          key: pio-toolchain-${{ runner.os }}-espressif8266-3.0.0-v4
           restore-keys: pio-toolchain-${{ runner.os }}-
 
       # ── Library downloads cache ───────────────────────────────────────────
@@ -177,62 +177,51 @@ jobs:
       - name: Install PlatformIO platform & libraries
         run: pio pkg install --environment d1_mini
 
-      - name: Set up Node.js 18
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Cache framework node_modules
-        id: npm_cache
-        uses: actions/cache@v4
-        with:
-          path: .pio/libdeps/d1_mini/ESP8266 IoT Framework/node_modules
-          key: npm-fw-${{ runner.os }}-${{ hashFiles('.pio/libdeps/d1_mini/ESP8266 IoT Framework/package.json') }}
-          restore-keys: npm-fw-${{ runner.os }}-
-
-      - name: Install npm deps in framework
-        if: steps.npm_cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          FW_DIR=""
-          while IFS= read -r -d '' dir; do
-            if [ -f "$dir/package.json" ]; then FW_DIR="$dir"; break; fi
-          done < <(find .pio/libdeps/d1_mini -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
-
-          if [ -z "$FW_DIR" ]; then
-            echo "⚠️  Framework package.json not found — PlatformIO will run npm ci during build"
-            exit 0
-          fi
-
-          echo "📦 npm install in: $FW_DIR"
-          cd "$FW_DIR"
-          npm install --legacy-peer-deps
-          echo "✅ npm install complete"
-
       # ── Build object cache ────────────────────────────────────────────────
-      # PLATFORMIO_BUILD_CACHE_DIR points PlatformIO at a stable, versioned
-      # cache directory that persists across runs.  This is the fix for the
-      # ".pio won't use cache" warning — PlatformIO requires this env var to
-      # activate its shared build cache; the .pio/build dir alone is not enough.
       - name: Cache PlatformIO build objects
         uses: actions/cache@v4
         with:
           path: ~/.pio/build_cache
-          key: pio-build-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}-v1
+          key: pio-build-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}-v2
           restore-keys: pio-build-cache-${{ runner.os }}-
 
+      # ── Assemble README from modular docs ──────────────────────────────────
+      - name: Assemble full README
+        run: |
+          cat README.md \
+              docs/hardware.md \
+              docs/display.md \
+              docs/buttons.md \
+              docs/settings.md \
+              docs/build.md \
+              docs/recovery.md \
+              > README_full.md
+          echo "✅ README_full.md assembled ($(wc -l < README_full.md) lines)"
+
+      # ── Build firmware ─────────────────────────────────────────────────────
       - name: Build firmware
         env:
           PLATFORMIO_BUILD_CACHE_DIR: ~/.pio/build_cache
         run: pio run -e d1_mini
 
+      # ── Build LittleFS image ───────────────────────────────────────────────
+      - name: Build LittleFS image
+        env:
+          PLATFORMIO_BUILD_CACHE_DIR: ~/.pio/build_cache
+        run: pio run -e d1_mini --target buildfs
+
+      # ── Upload artifacts ───────────────────────────────────────────────────
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware-d1_mini
-          path: .pio/build/d1_mini/firmware.bin
+          path: |
+            .pio/build/d1_mini/firmware.bin
+            .pio/build/d1_mini/littlefs.bin
+            README_full.md
           retention-days: 30
 
+      # ── GitHub Release ─────────────────────────────────────────────────────
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         env:
@@ -243,7 +232,8 @@ jobs:
           gh release create "$TAG" \
             --title "Firmware $TAG" \
             --notes "$BODY" \
-            .pio/build/d1_mini/firmware.bin
+            .pio/build/d1_mini/firmware.bin \
+            .pio/build/d1_mini/littlefs.bin
           echo "✅ Release $TAG created"
 
 # ════════════════════════════════════════════════════════════════════

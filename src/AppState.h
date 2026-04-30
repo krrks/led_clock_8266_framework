@@ -39,9 +39,9 @@ enum SI : int {
     SI_COUNT
 };
 
-// ─── RTC flag ────────────────────────────────────────────────────────────
-#define RTC_MAGIC 0xC10CFA11UL
-struct RTCData { uint32_t magic; uint32_t enterRecovery; };
+// RTC flag — now owned by RecoveryManager. Legacy definition for reference:
+// struct RTCData { uint32_t magic; uint32_t enterRecovery; };
+// Use RecoveryManager::get().trigger() instead of direct RTC manipulation.
 
 // ─────────────────────────────────────────────────────────────────────────
 // Extern declarations — defined in main.cpp

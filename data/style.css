@@ -1,0 +1,29 @@
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.5 system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;max-width:800px;margin:0 auto;padding:10px}
+header{text-align:center;margin-bottom:15px}
+h1{color:#ff6600;font-size:22px;margin:8px 0}
+nav{display:flex;gap:4px;margin:10px 0}
+.nav-btn{padding:8px 16px;background:#16213e;border:none;color:#e0e0e0;cursor:pointer;border-radius:4px;flex:1}
+.nav-btn.active{background:#ff6600;color:#000}
+.sys-info{color:#888;font-size:12px;margin:6px 0}
+.tab{display:none}
+.tab.active{display:block}
+.card{background:#16213e;padding:14px;border-radius:6px;text-align:center}
+.card h3{color:#888;font-size:12px;margin-bottom:6px}
+.big{font-size:24px;font-weight:bold;color:#fff}
+.dash-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.settings-grid{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:12px}
+.setting-row{display:flex;align-items:center;background:#16213e;padding:8px 12px;border-radius:4px;gap:10px}
+.setting-row label{min-width:120px;font-weight:bold;color:#ff6600;font-size:13px}
+.setting-row input,.setting-row select{flex:1;background:#0f3460;color:#fff;border:none;padding:6px 10px;border-radius:3px;font-size:13px}
+.setting-row input[type=checkbox]{flex:0;width:20px;height:20px;cursor:pointer}
+.setting-row .desc{font-size:11px;color:#888}
+.btn-primary{background:#ff6600;color:#000;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;font-weight:bold;width:100%}
+.btn-primary:hover{background:#ff8833}
+.pin-table{width:100%;border-collapse:collapse}
+.pin-table th{background:#16213e;color:#ff6600;padding:8px;text-align:left}
+.pin-table td{padding:8px;border-bottom:1px solid #0f3460}
+.pin-table tr:hover{background:#16213e}
+.serial-term{background:#000;color:#0f0;height:350px;overflow-y:auto;padding:10px;font:13px monospace;border-radius:4px;margin-bottom:8px;white-space:pre-wrap;word-break:break-all}
+#serialInput{width:100%;background:#0f3460;color:#0f0;border:none;padding:8px;border-radius:3px;font:13px monospace}
+#settingsStatus{margin-top:8px;color:#ff6600;font-size:13px}

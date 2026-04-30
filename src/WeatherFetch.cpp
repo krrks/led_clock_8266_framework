@@ -1,20 +1,17 @@
 // WeatherFetch.cpp — OWM weather HTTP client + recovery trigger
 #include "WeatherFetch.h"
 #include "AppState.h"
+#include "recovery/RecoveryManager.h"
 
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
-#include "WiFiManager.h"
-#include "configManager.h"
+#include "wifi/WiFiService.h"
+#include "config/ConfigManager.h"
 
 // ─── Recovery trigger ─────────────────────────────────────────────────────
 void triggerRecovery() {
-    Serial.println("[Recovery] writing RTC flag → restart");
-    RTCData rtc = { RTC_MAGIC, 1 };
-    ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
-    delay(50);
-    ESP.restart();
+    RecoveryManager::get().trigger();
 }
 
 // ─── Weather fetch ────────────────────────────────────────────────────────
