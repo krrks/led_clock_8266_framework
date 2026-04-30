@@ -1,59 +1,32 @@
 #!build
-## v1.007 — 四键操作 + 旋转/翻转分离 + 滚动速度可配置
+## v1.008 — NeoPixelBus DMA (WiFi-safe LED output) + build cache fix
 
-### 新增：第四个物理按钮 BTN4 CONFIRM (GPIO13 / D7)
-- 普通模式 单击    → 立即显示 IP 地址 8 秒
-- 设置模式 单击    → 保存并退出设置
-- 设置模式 长按3秒 → **取消**（恢复快照，不保存）
-- 恢复模式 单击    → 清除恢复标志并重启（退出恢复）
-- 接线方式：一端接 GPIO13(D7)，另一端接 GND；内置上拉，无需外部电阻
+### Root-cause fix: WS2812B output now WiFi-safe
+- **Replaced FastLED** (bit-bang GPIO, disables interrupts ~300 µs per frame)
+  with **NeoPixelBus DMA/I2S** (`NeoEsp8266Dma800KbpsMethod`)
+- I2S DMA runs entirely in hardware — never disables WiFi interrupts
+- Fixes: "only first pixel lights", "random single pixel", "no response" on button press
+  that were all caused by WiFi ISR clobbering the FastLED bit-bang timing
 
-### 旋转与翻转拆分为独立配置
-- 旧 `displayOrientation`（6选1混合项）已替换为：
-  - `rotation`：0° / 90°CW / 180° / 270°CW（单独选择）
-  - `flip`：无 / H-Flip（左右镜像） / V-Flip（上下镜像）
-- 两者可叠加：例如 180° + H-Flip = V-Flip + 180°
-- 在设置模式（LED矩阵）显示为 `RO:N/90/180/270` 和 `FL:N/H/V`
-- Web Configuration 页面同步更新两个独立下拉菜单
+### ⚠ Hardware rewire required
+- Data line moved: **D2 (GPIO4) → RX/D9 (GPIO3)**
+- NeoPixelBus DMA hardwires to GPIO3 (I2S data-out)
+- `Serial.begin()` switched to `SERIAL_TX_ONLY` — frees GPIO3 for DMA,
+  TX (D8/GPIO1) still works normally for serial monitor
+- All other pins unchanged (buttons, onboard LED)
 
-### 模式切换立即刷新
-- 点击 BTN1 MODE 切换 CLOCK/DATE/TEMP/IP 时，LED 立即重绘
-  （之前只有 IP 模式立即刷新，其他模式等待下一周期）
+### CI: build cache now works
+- Added `PLATFORMIO_BUILD_CACHE_DIR=~/.pio/build_cache` env var to build job
+- Added `actions/cache` step for `~/.pio/build_cache`
+- This is what PlatformIO requires to use its shared object cache;
+  caching `.pio/build/d1_mini` alone was insufficient and produced the
+  "Advanced Memory Usage ... won't use cache" warning
 
-### 默认亮度改为最低档
-- `brightness` 默认值：`1`（Medium）→ `0`（Dim）
-- `brightDim` 默认 PWM 值：`25` → `1`（开发阶段尽量暗）
-
-### 滚动速度可配置
-- 新增 `scrollSpeed` 配置项（uint8_t，30-200 ms/列，默认 80）
-- Web 页面提供滑动条调节
-- 设置模式 LED 矩阵显示 `SP:xx`
-- 适用于所有滚动文本：IP 地址、RECOVERY、设置项标签
-- 注意：原编译时常量 `SCROLL_FRAME_MS=60ms` 已作废，运行时读取配置
-
-### 设置模式按键调整
-- BTN2 UP / BTN3 DOWN **长按** → ±5（快速调节）；**单击** → ±1（精细调节）
-- BTN4 CONFIRM 添加为主要的保存/取消键（详见上方）
-- 超时保存时间仍为 30 秒
-
-### 按键功能总览（v1.007）
-| 按键 | 按压类型 | 普通模式 | 设置模式 | 恢复模式 |
-|------|---------|---------|---------|---------|
-| BTN1 MODE | 单击 | 切换显示模式 | 下一设置项 | — |
-| BTN1 MODE | 长按3s | 进入设置模式 | 保存退出 | 清除标志重启 |
-| BTN1 MODE | 长按8s | 进入恢复模式 | 保存+恢复 | — |
-| BTN2 UP | 单击 | 亮度+1 | 值+1 | — |
-| BTN2 UP | 长按3s | 强制NTP+天气刷新 | 值+5 | — |
-| BTN3 DOWN | 单击 | 亮度-1 | 值-1 | — |
-| BTN3 DOWN | 长按3s | 切换天气开关 | 值-5 | — |
-| BTN4 CONFIRM | 单击 | 显示IP 8秒 | **保存**退出 | 清除标志重启 |
-| BTN4 CONFIRM | 长按3s | — | **取消**退出 | — |
-
-### 配置结构变更（EEPROM 自动重置）
-- 移除 `displayOrientation`（uint8_t）
-- 新增 `rotation`（uint8_t，默认0）
-- 新增 `flip`（uint8_t，默认0）
-- 新增 `scrollSpeed`（uint8_t，默认80）
-- `brightness` 默认改为 0
-- `brightDim` 默认改为 1
-> ⚠️ 配置结构已变更，首次刷新后 EEPROM 自动重置为默认值，需重新配置。
+### Code cleanup
+- Removed `FastLED` from `lib_deps` and all `#include <FastLED.h>` references
+- `leds[]` (CRGB array) removed; `NeoPixelBus neoStrip` is the sole LED object
+- `applyBrightness()` simplified — brightness now applied per-pixel in `flushDisplay()`
+  by scaling RGB channels, no global FastLED brightness register needed
+- Legacy source files (`DisplayManager`, `ClockFace`, etc.) excluded from build
+  via `src_filter` in `platformio.ini` (files kept for reference)
+- New `NeoStrip.h` declares the global strip for inclusion across modules

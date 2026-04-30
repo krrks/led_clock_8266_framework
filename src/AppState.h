@@ -3,7 +3,6 @@
 // All global variables are *defined* in main.cpp and declared extern here.
 
 #include <Arduino.h>
-#include <FastLED.h>
 #include <time.h>
 #include "LEDMatrixLayout.h"
 
@@ -30,10 +29,10 @@ enum DispMode : uint8_t { DM_CLOCK, DM_DATE, DM_TEMP, DM_IP, DM_COUNT };
 // ─── Settings item indices ────────────────────────────────────────────────
 // Time/date items (SI_HOUR..SI_WD) are hidden when NTP is synced.
 enum SI : int {
-    SI_HOUR=0, SI_MIN, SI_DAY, SI_MON, SI_YEAR, SI_WD, // manual time/date
+    SI_HOUR=0, SI_MIN, SI_DAY, SI_MON, SI_YEAR, SI_WD,
     SI_TZ,
-    SI_ROTATION,    // display rotation: 0=0°  1=90°CW  2=180°  3=270°CW
-    SI_FLIP,        // display flip:     0=none 1=H-flip 2=V-flip
+    SI_ROTATION,    // 0=0°  1=90°CW  2=180°  3=270°CW
+    SI_FLIP,        // 0=none  1=H-flip  2=V-flip
     SI_SCROLLSPD,   // scroll ms per column (30-200)
     SI_BDIM, SI_BMED, SI_BBRT,
     SI_WX, SI_WIFI,
@@ -47,7 +46,8 @@ struct RTCData { uint32_t magic; uint32_t enterRecovery; };
 // ─────────────────────────────────────────────────────────────────────────
 // Extern declarations — defined in main.cpp
 // ─────────────────────────────────────────────────────────────────────────
-extern CRGB     leds[NUM_LEDS];
+
+// Logical pixel buffer — packed 0x00RRGGBB per pixel
 extern uint32_t displayMatrix[MATRIX_HEIGHT][MATRIX_WIDTH];
 
 extern AppMode  appMode;
@@ -88,5 +88,6 @@ extern unsigned long tShowIPUntil;
 extern unsigned long tLedBlink;
 extern bool          ledBlinkState;
 
-// ─── Shared helpers (defined in main.cpp, used by SettingsMode.cpp) ───────
-void applyBrightness();   // reads configManager.data.brightness + bright*/
+// ─── Shared helpers (defined in main.cpp) ─────────────────────────────────
+// Triggers a pending redraw so next flushDisplay() picks up the new brightness.
+void applyBrightness();
