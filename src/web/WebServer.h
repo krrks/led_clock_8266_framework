@@ -18,6 +18,7 @@ private:
     AsyncWebServer* _server = nullptr;
     AsyncWebSocket* _wsDashboard = nullptr;
     AsyncWebSocket* _wsSerial = nullptr;
+    String _configPostBody;
 
     void _setupRoutes();
     void _handleConfigGet(AsyncWebServerRequest* req);

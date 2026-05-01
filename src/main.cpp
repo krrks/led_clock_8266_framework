@@ -26,10 +26,12 @@
 #include "LittleFS.h"
 #include <NeoPixelBus.h>
 #include <ESP8266WiFi.h>
+#include <ArduinoOTA.h>
 #include <time.h>
 
 // Infrastructure (replaces maakbaas/esp8266-iot-framework)
 #include "config/ConfigManager.h"
+#include "config/WiFiDefaults.h"
 #include "wifi/WiFiService.h"
 #include "ntp/NtpClient.h"
 #include "web/WebServer.h"
@@ -225,11 +227,22 @@ void setup() {
                   curRotation, curFlip, configManager.data.scrollSpeed,
                   weatherEnabled, configManager.data.wifiEnabled);
 
+    // Apply firmware WiFi defaults if config has no saved credentials
+    if (strlen(configManager.data.wifiSSID) == 0) {
+        strlcpy(configManager.data.wifiSSID, WIFI_DEFAULT_SSID,
+                sizeof(configManager.data.wifiSSID));
+        strlcpy(configManager.data.wifiPassword, WIFI_DEFAULT_PASSWORD,
+                sizeof(configManager.data.wifiPassword));
+        Serial.printf("[Boot] WiFi defaults applied: %s\n", WIFI_DEFAULT_SSID);
+    }
+
     // Web config save → immediate live update
     configManager.setConfigSaveCallback([]() {
         curRotation    = configManager.data.rotation;
         curFlip        = configManager.data.flip;
         weatherEnabled = configManager.data.defaultWeather;
+        WiFiManager.setCredentials(configManager.data.wifiSSID,
+                                   configManager.data.wifiPassword);
         if (!ntpSynced) {
             memset(&manualTm, 0, sizeof(manualTm));
             manualTm.tm_hour  = configManager.data.manualHour;
@@ -265,16 +278,19 @@ void setup() {
         return;
     }
 
-    webServer.begin();
-    dash.begin(&webServer.wsDashboard(), DASH_INT_MS);
-
     // ── WiFi ─────────────────────────────────────────────────────────────
     if (appMode == AM_RECOVERY || configManager.data.wifiEnabled) {
+        WiFiManager.setCredentials(configManager.data.wifiSSID,
+                                   configManager.data.wifiPassword);
         WiFiManager.begin(appMode==AM_RECOVERY ? "LED-CLOCK"
                                                : configManager.data.projectName, 15000);
         wifiActive = true;
         bool wifiOK = (WiFi.status()==WL_CONNECTED && !WiFiManager.isCaptivePortal());
-        if (wifiOK) Serial.printf("[WiFi] IP %s\n", WiFi.localIP().toString().c_str());
+        if (wifiOK) {
+            Serial.printf("[WiFi] IP %s\n", WiFi.localIP().toString().c_str());
+            ArduinoOTA.begin();
+            Serial.println(F("[OTA] ready"));
+        }
 
         if (appMode == AM_NORMAL) {
             const char* tz = strlen(configManager.data.timezone) > 0
@@ -311,6 +327,9 @@ void setup() {
         Serial.println("[WiFi] disabled — radio off");
     }
 
+    webServer.begin();
+    dash.begin(&webServer.wsDashboard(), DASH_INT_MS);
+
     unsigned long now = millis();
     tLastActivity = tLastNtp = tLastWeather = tLastDash = tLastHeart = now;
     tLastDisplay  = 0;
@@ -331,6 +350,7 @@ void loop() {
     }
 
     if (wifiActive) WiFiManager.loop();
+    if (wifiActive) ArduinoOTA.handle();
     // updater.loop();  // handled by webServer now
     configManager.loop();
     dash.loop();

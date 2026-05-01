@@ -14,6 +14,7 @@
     <button class="nav-btn" onclick="showTab('settings')">Settings</button>
     <button class="nav-btn" onclick="showTab('pins')">Pins</button>
     <button class="nav-btn" onclick="showTab('serial')">Serial</button>
+    <button class="nav-btn" onclick="rebootDevice()" style="background:#c33;color:#fff">Reboot</button>
   </nav>
   <div id="sysInfo" class="sys-info"></div>
 </header>
@@ -50,8 +51,12 @@
 
   <!-- Serial Monitor -->
   <section id="serial" class="tab">
+    <div class="toggleRow">
+      <label><input type="checkbox" id="serWired" checked onchange="toggleSerial('wired')"> Wired</label>
+      <label><input type="checkbox" id="serWireless" onchange="toggleSerial('wireless')"> Wireless</label>
+    </div>
     <div id="serialTerm" class="serial-term"></div>
-    <input id="serialInput" placeholder="Type + Enter to send...">
+    <input id="serialInput" placeholder="Command (help for list) + Enter...">
   </section>
 </main>
 

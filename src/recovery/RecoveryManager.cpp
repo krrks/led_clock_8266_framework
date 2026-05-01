@@ -1,5 +1,6 @@
 // RecoveryManager.cpp — boot check, web server, serial monitor, OTA
 #include "RecoveryManager.h"
+#include "RecoveryHTML.h"
 #include "LittleFS.h"
 #include <ESP8266WiFi.h>
 #include <Updater.h>
@@ -129,6 +130,8 @@ void RecoveryManager::begin() {
     }
 
     _startWebServer();
+    SerialOut.setWiredEnabled(serialMonitorEnabled);
+    SerialOut.setWirelessEnabled(wirelessSerialEnabled);
 }
 
 void RecoveryManager::_startSTA() {
@@ -164,6 +167,8 @@ void RecoveryManager::_startWebServer() {
     // ── Firmware upload ───────────────────────────────────────────────
     _server->on("/firmware", HTTP_POST,
         [this](AsyncWebServerRequest* req) {
+            Serial.printf("[Recovery] POST /firmware from %s\n",
+                          req->client()->remoteIP().toString().c_str());
             req->send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
             if (!Update.hasError()) {
                 Serial.println("[Recovery] firmware OK — rebooting");
@@ -177,6 +182,8 @@ void RecoveryManager::_startWebServer() {
 
     // ── File list ─────────────────────────────────────────────────────
     _server->on("/api/files", HTTP_GET, [](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] GET /api/files from %s\n",
+                      req->client()->remoteIP().toString().c_str());
         JsonDocument doc;
         JsonArray arr = doc["files"].to<JsonArray>();
         Dir dir = LittleFS.openDir("/");
@@ -192,6 +199,8 @@ void RecoveryManager::_startWebServer() {
 
     // ── File delete ───────────────────────────────────────────────────
     _server->on("/api/files/delete", HTTP_POST, [](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] POST /api/files/delete from %s\n",
+                      req->client()->remoteIP().toString().c_str());
         if (req->hasParam("name", true)) {
             String name = req->getParam("name", true)->value();
             if (name.startsWith("/")) name = "/" + name;
@@ -203,19 +212,133 @@ void RecoveryManager::_startWebServer() {
         }
     });
 
+    // ── Serial monitor toggle ──────────────────────────────────────────
+    _server->on("/api/serial", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] GET /api/serial from %s\n",
+                      req->client()->remoteIP().toString().c_str());
+        JsonDocument doc;
+        doc["wired"]    = serialMonitorEnabled;
+        doc["wireless"] = wirelessSerialEnabled;
+        String json;
+        serializeJson(doc, json);
+        req->send(200, "application/json", json);
+    });
+
+    _server->on("/api/serial", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] POST /api/serial from %s\n",
+                      req->client()->remoteIP().toString().c_str());
+        if (req->hasParam("wired", true))
+            serialMonitorEnabled = (req->getParam("wired", true)->value() == "true");
+        if (req->hasParam("wireless", true))
+            wirelessSerialEnabled = (req->getParam("wireless", true)->value() == "true");
+        SerialOut.setWiredEnabled(serialMonitorEnabled);
+        SerialOut.setWirelessEnabled(wirelessSerialEnabled);
+        Serial.printf("[Recovery] serial wired=%d wireless=%d\n",
+                      serialMonitorEnabled, wirelessSerialEnabled);
+        req->send(200, "text/plain", "OK");
+    });
+
+    // ── WiFi settings ───────────────────────────────────────────────────
+    _server->on("/api/wifi", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] GET /api/wifi from %s\n",
+                      req->client()->remoteIP().toString().c_str());
+        JsonDocument doc;
+        doc["ssid"]     = staSSID;
+        doc["password"] = staPassword;
+        String json;
+        serializeJson(doc, json);
+        req->send(200, "application/json", json);
+    });
+
+    _server->on("/api/wifi", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] POST /api/wifi from %s\n",
+                      req->client()->remoteIP().toString().c_str());
+        if (req->hasParam("ssid", true))
+            staSSID = req->getParam("ssid", true)->value();
+        if (req->hasParam("password", true))
+            staPassword = req->getParam("password", true)->value();
+        _saveWiFiConfig();
+        req->send(200, "text/plain", "WiFi saved");
+    });
+
+    _server->on("/api/wifi", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] DELETE /api/wifi from %s\n",
+                      req->client()->remoteIP().toString().c_str());
+        staSSID = "";
+        staPassword = "";
+        _saveWiFiConfig();
+        req->send(200, "text/plain", "WiFi cleared");
+    });
+
     // ── Serial WebSocket ──────────────────────────────────────────────
     _wsSerial = new AsyncWebSocket("/ws/serial");
-    _wsSerial->onEvent([](AsyncWebSocket* s, AsyncWebSocketClient* c,
-                          AwsEventType t, void*, uint8_t* d, size_t len) {
-        if (t == WS_EVT_DATA) {
-            // Send received web input to hardware Serial
-            for (size_t i = 0; i < len; i++) Serial.write(d[i]);
+    _wsSerial->onEvent([this](AsyncWebSocket* s, AsyncWebSocketClient* c,
+                              AwsEventType t, void*, uint8_t* d, size_t len) {
+        switch (t) {
+        case WS_EVT_CONNECT:
+            Serial.printf("[Recovery] WS /ws/serial connect from %s\n",
+                          c->remoteIP().toString().c_str());
+            wirelessSerialEnabled = true;
+            SerialOut.setWirelessEnabled(true);
+            break;
+        case WS_EVT_DISCONNECT:
+            Serial.printf("[Recovery] WS /ws/serial disconnect from %s\n",
+                          c->remoteIP().toString().c_str());
+            break;
+        case WS_EVT_DATA: {
+            String cmd; cmd.reserve(len + 1);
+            for (size_t i = 0; i < len; i++) cmd += (char)d[i];
+            cmd.trim();
+            if (cmd.length() == 0) break;
+            cmd.toLowerCase();
+
+            // Command table — add new commands here
+            Cmd commands[] = {
+                {"help",   &RecoveryManager::_wsHelp},
+                {"?",      &RecoveryManager::_wsHelp},
+                {"status", &RecoveryManager::_wsStatus},
+                {"stats",  &RecoveryManager::_wsStatus},
+                {"heap",   &RecoveryManager::_wsHeap},
+                {"reboot", &RecoveryManager::_wsReboot},
+                {"wifi",   &RecoveryManager::_wsWifi},
+                {"clear",  &RecoveryManager::_wsClear},
+                {"ls",     &RecoveryManager::_wsLs},
+                {"dir",    &RecoveryManager::_wsLs},
+                {"info",   &RecoveryManager::_wsInfo},
+                {"sys",    &RecoveryManager::_wsInfo},
+                {"scan",   &RecoveryManager::_wsScan},
+                {"df",     &RecoveryManager::_wsDf},
+                {"flash",  &RecoveryManager::_wsDf},
+                {"reset",  &RecoveryManager::_wsReset},
+                {"factory",&RecoveryManager::_wsReset},
+            };
+
+            bool found = false;
+            for (auto& x : commands) {
+                if (cmd == x.name) {
+                    (this->*x.fn)(c);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                if (serialMonitorEnabled) {
+                    Serial.write(cmd.c_str(), cmd.length());
+                    Serial.write("\r\n");
+                }
+                c->text("Unknown: " + cmd + " — type help\r\n");
+            }
+            break;
+        }
+        default: break;
         }
     });
     _server->addHandler(_wsSerial);
 
     // ── System info ───────────────────────────────────────────────────
     _server->on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] GET /api/status from %s\n",
+                      req->client()->remoteIP().toString().c_str());
         JsonDocument doc;
         doc["heap"]     = ESP.getFreeHeap();
         doc["uptime"]   = millis() / 1000;
@@ -227,16 +350,31 @@ void RecoveryManager::_startWebServer() {
         req->send(200, "application/json", json);
     });
 
-    // ── Exit recovery / reboot ────────────────────────────────────────
+    // ── Mode detection for AI / external tools ──────────────────────────
+    _server->on("/api/mode", HTTP_GET, [](AsyncWebServerRequest* req) {
+        req->send(200, "application/json", "{\"mode\":\"recovery\"}");
+    });
+
+    // ── Exit recovery / reboot to normal ───────────────────────────────
     _server->on("/api/exit", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] POST /api/exit from %s\n",
+                      req->client()->remoteIP().toString().c_str());
         RTCData rtc = { RTC_MAGIC, 0 };
-        ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
-        req->send(200, "text/plain", "rebooting");
+        if (ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc))) {
+            Serial.println(F("[Recovery] RTC cleared — rebooting to normal"));
+            req->send(200, "text/plain", "OK");
+        } else {
+            Serial.println(F("[Recovery] RTC write failed"));
+            req->send(500, "text/plain", "RTC write failed");
+            return;
+        }
         delay(200); ESP.restart();
     });
 
     // ── Root — serve recovery SPA ─────────────────────────────────────
     _server->on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        Serial.printf("[Recovery] GET / from %s\n",
+                      req->client()->remoteIP().toString().c_str());
         req->send(200, "text/html", _getRecoveryHTML());
     });
 
@@ -258,6 +396,136 @@ void RecoveryManager::_handleUpload(AsyncWebServerRequest*, String filename,
         Update.end(true);
         Serial.println(F("[Recovery] OTA done"));
     }
+}
+
+void RecoveryManager::_saveWiFiConfig() {
+    // Read existing config.json, update WiFi fields, write back
+    File f = LittleFS.open("/config.json", "r");
+    JsonDocument doc;
+    if (f) {
+        deserializeJson(doc, f);
+        f.close();
+    }
+    doc["wifiSSID"]     = staSSID;
+    doc["wifiPassword"] = staPassword;
+    f = LittleFS.open("/config.json", "w");
+    if (f) {
+        serializeJson(doc, f);
+        f.close();
+        Serial.printf("[Recovery] WiFi config saved: %s\n",
+                      staSSID.length() ? staSSID.c_str() : "(cleared)");
+    } else {
+        Serial.println(F("[Recovery] ERROR: cannot write config.json"));
+    }
+}
+
+// ─── Serial command handlers ─────────────────────────────────────────────
+
+void RecoveryManager::_wsHelp(AsyncWebSocketClient* c) {
+    c->text(
+        "help/?      status/stats  heap      reboot\r\n"
+        "wifi        clear         ls/dir    info/sys\r\n"
+        "scan        df/flash      reset/factory\r\n"
+    );
+}
+
+void RecoveryManager::_wsStatus(AsyncWebSocketClient* c) {
+    String r;
+    r += "Heap: " + String(ESP.getFreeHeap()) + " B\r\n";
+    r += "Uptime: " + String(millis() / 1000) + " s\r\n";
+    r += "Reset: " + ESP.getResetReason() + "\r\n";
+    r += "Mode: " + String(_apMode ? "AP" : "STA") + "\r\n";
+    if (_apMode)
+        r += "AP IP: " + WiFi.softAPIP().toString() + "\r\n";
+    else
+        r += "IP: " + WiFi.localIP().toString() + "\r\n";
+    r += "Serial wired=" + String(serialMonitorEnabled)
+       + " wireless=" + String(wirelessSerialEnabled) + "\r\n";
+    c->text(r);
+}
+
+void RecoveryManager::_wsHeap(AsyncWebSocketClient* c) {
+    c->text(String("Free heap: ") + ESP.getFreeHeap() + " B\r\n");
+}
+
+void RecoveryManager::_wsReboot(AsyncWebSocketClient* c) {
+    c->text("Rebooting...\r\n");
+    delay(100); ESP.restart();
+}
+
+void RecoveryManager::_wsWifi(AsyncWebSocketClient* c) {
+    String r;
+    r += "STA SSID: " + (staSSID.length() ? staSSID : "(none)") + "\r\n";
+    if (_apMode)
+        r += "AP SSID: " + apSSID + "\r\n"
+           + "AP IP: " + WiFi.softAPIP().toString() + "\r\n";
+    else
+        r += "IP: " + WiFi.localIP().toString() + "\r\n";
+    c->text(r);
+}
+
+void RecoveryManager::_wsClear(AsyncWebSocketClient* c) {
+    c->text("\033[2J\033[H");
+}
+
+void RecoveryManager::_wsLs(AsyncWebSocketClient* c) {
+    Dir dir = LittleFS.openDir("/");
+    String r;
+    int n = 0;
+    while (dir.next()) {
+        r += dir.fileName() + "  " + String(dir.fileSize()) + " B\r\n";
+        n++;
+    }
+    c->text(n ? r : "(empty)\r\n");
+}
+
+void RecoveryManager::_wsInfo(AsyncWebSocketClient* c) {
+    String r;
+    r += "Chip ID:   " + String(ESP.getChipId(), HEX) + "\r\n";
+    r += "CPU Freq:  " + String(ESP.getCpuFreqMHz()) + " MHz\r\n";
+    r += "SDK:       " + String(ESP.getSdkVersion()) + "\r\n";
+    r += "Flash:     " + String(ESP.getFlashChipRealSize()) + " B\r\n";
+    r += "Sketch:    " + String(ESP.getSketchSize()) + " B\r\n";
+    r += "Free heap: " + String(ESP.getFreeHeap()) + " B\r\n";
+    c->text(r);
+}
+
+void RecoveryManager::_wsScan(AsyncWebSocketClient* c) {
+    c->text("Scanning WiFi...\r\n");
+    int n = WiFi.scanNetworks();
+    if (n <= 0) {
+        c->text("No networks found.\r\n");
+        return;
+    }
+    String r;
+    for (int i = 0; i < n; i++) {
+        r += String(i + 1) + ". " + WiFi.SSID(i) + "  ("
+           + String(WiFi.RSSI(i)) + " dBm)  "
+           + (WiFi.encryptionType(i) == ENC_TYPE_NONE ? "OPEN" : "***") + "\r\n";
+    }
+    c->text(r);
+}
+
+void RecoveryManager::_wsDf(AsyncWebSocketClient* c) {
+    FSInfo fs;
+    LittleFS.info(fs);
+    String r;
+    r += "Sketch:  " + String(ESP.getSketchSize()) + " B\r\n";
+    r += "Flash:   " + String(ESP.getFlashChipRealSize()) + " B total\r\n";
+    r += "LittleFS: " + String(fs.totalBytes) + " B total, "
+       + String(fs.usedBytes) + " B used ("
+       + String(fs.usedBytes * 100 / fs.totalBytes) + "%)\r\n";
+    r += "Free:    " + String(ESP.getFreeHeap()) + " B heap, "
+       + String(ESP.getFlashChipRealSize() - ESP.getSketchSize() - fs.totalBytes) + " B flash\r\n";
+    c->text(r);
+}
+
+void RecoveryManager::_wsReset(AsyncWebSocketClient* c) {
+    c->text("Factory reset — clearing config & rebooting...\r\n");
+    LittleFS.remove("/config.json");
+    RTCData rtc = { RTC_MAGIC, 0 };
+    ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
+    delay(200); ESP.restart();
 }
 
 void RecoveryManager::_broadcastSerial() {
@@ -286,105 +554,8 @@ void RecoveryManager::loop() {
     _broadcastSerial();
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Recovery web UI — embedded PROGMEM HTML/JS/CSS
-// Single-page app with tabs: Firmware | Files | Serial Monitor
-// ═══════════════════════════════════════════════════════════════════════
+// Recovery web UI — see src/recovery/RecoveryHTML.h
 
 String RecoveryManager::_getRecoveryHTML() {
-    return String(F(
-"<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' "
-"content='width=device-width,initial-scale=1'><title>Recovery</title>"
-"<style>"
-"*{box-sizing:border-box;margin:0;padding:0}"
-"body{font:14px monospace;background:#1a1a2e;color:#e0e0e0;max-width:680px;margin:0 auto;padding:10px}"
-"h1{color:#ff6600;text-align:center;margin:10px 0}"
-".tabs{display:flex;gap:2px;margin-bottom:10px}"
-".tab{padding:8px 16px;background:#16213e;border:none;color:#e0e0e0;cursor:pointer;border-radius:4px 4px 0 0;flex:1;text-align:center}"
-".tab.active{background:#ff6600;color:#000}"
-".panel{display:none;background:#16213e;padding:12px;border-radius:0 4px 4px 4px}"
-".panel.active{display:block}"
-"input,button,select{width:100%;padding:8px;margin:6px 0;border:none;border-radius:3px;font:14px monospace}"
-"input{background:#0f3460;color:#e0e0e0}"
-"button{background:#ff6600;color:#000;cursor:pointer;font-weight:bold}"
-"button:hover{background:#ff8833}"
-"#serialTerm{background:#000;color:#0f0;height:300px;overflow-y:auto;padding:8px;margin:6px 0;border-radius:3px;white-space:pre-wrap;word-break:break-all}"
-"#serialInput{background:#0f3460;color:#0f0}"
-".status{color:#ff6600;margin:6px 0;min-height:20px}"
-".progress{width:100%;height:10px;background:#0f3460;border-radius:5px;margin:6px 0;overflow:hidden}"
-".progress div{height:100%;background:#ff6600;width:0%;transition:width .3s}"
-".fileItem{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #0f3460}"
-".fileItem button{width:auto;padding:4px 10px;margin:0}"
-".info{color:#888;font-size:12px}"
-"</style></head><body>"
-"<h1>ESP8266 Recovery</h1>"
-"<div class='tabs'>"
-"<button class='tab active' onclick='showTab(\"firmware\")'>Firmware</button>"
-"<button class='tab' onclick='showTab(\"files\")'>Files</button>"
-"<button class='tab' onclick='showTab(\"serial\")'>Serial Monitor</button>"
-"</div>"
-"<div id='firmware' class='panel active'>"
-"<p>Select a compiled .bin file and upload to update firmware.</p>"
-"<input type='file' id='fwFile' accept='.bin' onchange='uploadFirmware()'>"
-"<div class='progress'><div id='fwProgress'></div></div>"
-"<div id='fwStatus' class='status'></div>"
-"<button onclick='exitRecovery()'>Reboot to Normal</button>"
-"</div>"
-"<div id='files' class='panel'>"
-"<h3>LittleFS Files</h3>"
-"<div id='fileList'></div>"
-"<button onclick='loadFiles()'>Refresh</button>"
-"</div>"
-"<div id='serial' class='panel'>"
-"<div id='serialTerm'></div>"
-"<input id='serialInput' placeholder='Type command + Enter...' "
-"onkeydown='if(event.key==\"Enter\"){sendSerial(this.value);this.value=\"\"}'>"
-"<div><input type='checkbox' id='serialAuto' checked onchange='toggleAuto()'>"
-"<label for='serialAuto'>Auto-scroll</label></div>"
-"</div>"
-"<script>"
-"var ws;var activeTab='firmware';var autoScroll=true;"
-"function showTab(t){"
-"activeTab=t;"
-"document.querySelectorAll('.tab').forEach(function(e){e.classList.remove('active')});"
-"event.target.classList.add('active');"
-"document.querySelectorAll('.panel').forEach(function(e){e.classList.remove('active')});"
-"document.getElementById(t).classList.add('active');"
-"if(t==='serial')connectWS();else{if(ws)ws.close()}"
-"if(t==='files')loadFiles();"
-"}"
-"function uploadFirmware(){"
-"var f=document.getElementById('fwFile').files[0];if(!f)return;"
-"var x=new XMLHttpRequest();"
-"x.upload.onprogress=function(e){"
-"document.getElementById('fwProgress').style.width=Math.round(e.loaded/e.total*100)+'%';};"
-"x.onload=function(){document.getElementById('fwStatus').textContent=x.responseText;"
-"if(x.responseText=='OK')document.getElementById('fwStatus').textContent='Success — rebooting...';};"
-"x.onerror=function(){document.getElementById('fwStatus').textContent='Upload error';};"
-"x.open('POST','/firmware');x.send(f);"
-"document.getElementById('fwStatus').textContent='Uploading...';"
-"}"
-"function loadFiles(){"
-"fetch('/api/files').then(function(r){return r.json()}).then(function(d){"
-"var h='';d.files.forEach(function(f){"
-"h+='<div class=fileItem><span>'+f.name+' <span class=info>('+f.size+'B)</span></span>'"
-"+'<button onclick=delFile(\\''+f.name+'\\')>Delete</button></div>';});"
-"document.getElementById('fileList').innerHTML=h||'<p>No files</p>';});"
-"}"
-"function delFile(n){"
-"var f=new FormData();f.append('name',n);"
-"fetch('/api/files/delete',{method:'POST',body:f}).then(function(){loadFiles()});}"
-"function connectWS(){"
-"if(ws){ws.close()}"
-"ws=new WebSocket('ws://'+location.host+'/ws/serial');"
-"ws.onmessage=function(e){"
-"var t=document.getElementById('serialTerm');t.textContent+=e.data;"
-"if(t.textContent.length>10000)t.textContent=t.textContent.slice(-8000);"
-"if(autoScroll)t.scrollTop=t.scrollHeight;};}"
-"function sendSerial(m){if(ws)ws.send(m+'\\r\\n');}"
-"function toggleAuto(){autoScroll=document.getElementById('serialAuto').checked;}"
-"function exitRecovery(){fetch('/api/exit',{method:'POST'})}"
-"loadFiles();"
-"</script></body></html>"
-    ));
+    return String(FPSTR(RECOVERY_HTML));
 }

@@ -9,10 +9,18 @@ function showTab(name) {
   if (tab) tab.classList.add('active');
   var btn = document.querySelector('[onclick="showTab(\'' + name + '\')"]');
   if (btn) btn.classList.add('active');
-  if (name === 'serial') connectSerialWS();
+  if (name === 'serial') { connectSerialWS(); loadSerialConfig(); }
   if (name === 'settings') loadSettings();
   if (name === 'pins') loadPins();
   if (name === 'dashboard') connectDashWS();
+}
+
+// ── Reboot ──────────────────────────────────────────────────────────────
+function rebootDevice() {
+  if (!confirm('Reboot device?')) return;
+  fetch('/api/reboot', { method: 'POST' }).then(function() {
+    setTimeout(function() { location.reload(); }, 5000);
+  });
 }
 
 // ── System info bar ────────────────────────────────────────────────────
@@ -73,10 +81,12 @@ function saveConfig() {
     else if (el.type === 'number') cfg[key] = Number(el.value);
     else cfg[key] = el.value;
   });
+  var body = new URLSearchParams();
+  for (var k in cfg) { body.append(k, cfg[k]); }
   fetch('/api/config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(cfg)
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString()
   }).then(function(r) { return r.text(); }).then(function(t) {
     document.getElementById('settingsStatus').textContent = t;
   });
@@ -105,6 +115,20 @@ function connectSerialWS() {
     if (autoScroll) t.scrollTop = t.scrollHeight;
   };
   serialWs.onclose = function() { setTimeout(connectSerialWS, 3000); };
+}
+
+function loadSerialConfig() {
+  fetch('/api/serial').then(function(r) { return r.json(); }).then(function(d) {
+    document.getElementById('serWired').checked = d.wired;
+    document.getElementById('serWireless').checked = d.wireless;
+  });
+}
+function toggleSerial(t) {
+  var el = document.getElementById(t === 'wired' ? 'serWired' : 'serWireless');
+  var body = t + '=' + el.checked;
+  fetch('/api/serial', { method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body });
 }
 
 document.getElementById('serialInput').addEventListener('keydown', function(e) {
