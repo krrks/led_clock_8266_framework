@@ -7,10 +7,9 @@ void WiFiService::begin(const char* apName, unsigned long timeoutMs) {
     _started = true;
     _apMode  = false;
 
-    WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
-
     if (_ssid.length() > 0) {
+        WiFi.mode(WIFI_STA);
+        WiFi.setAutoReconnect(true);
         Serial.printf("[WiFi] STA connecting to %s\n", _ssid.c_str());
         WiFi.begin(_ssid.c_str(), _pass.c_str());
 
@@ -21,15 +20,16 @@ void WiFiService::begin(const char* apName, unsigned long timeoutMs) {
                 Serial.print(".");
             }
             Serial.println();
-        } else {
-            // Non-blocking — will connect in background; loop() handles DNS
         }
     } else {
         Serial.println(F("[WiFi] no credentials — skipping STA"));
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-        // Start AP fallback
+        // Reset WiFi stack before switching to AP mode
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        delay(100);
         _apMode = true;
         WiFi.mode(WIFI_AP);
         String apSSID = apName;

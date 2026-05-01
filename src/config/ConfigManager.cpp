@@ -43,6 +43,7 @@ void ConfigManager::begin() {
 
 void ConfigManager::save() {
     saveToFS();
+    yield();  // feed watchdog before callback
     if (_onSave) _onSave();
 }
 
@@ -125,8 +126,10 @@ bool ConfigManager::saveToFS() {
         Serial.println(F("[Config] ERROR: cannot open for write"));
         return false;
     }
+    yield();  // feed watchdog before flash write
     serializeJson(doc, f);
     f.close();
+    yield();
     return true;
 }
 

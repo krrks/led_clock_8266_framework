@@ -8,7 +8,15 @@
       "Bash(where platformio *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git *)",
+      "Bash(python -c \"import platformio; print\\(platformio.__file__\\)\")",
+      "Bash(cmd.exe /c \"where pio\")",
+      "Bash(python -m platformio run -e d1_mini)",
+      "Bash(\"C:/Users/Km/.platformio/penv/Scripts/pio.exe\" run *)",
+      "Bash(\"C:/Users/Km/.platformio/penv/Scripts/pio.exe\" pkg *)",
+      "Bash(curl *)",
+      "Bash(\"C:\\\\Users\\\\Km\\\\.platformio\\\\penv\\\\Scripts\\\\platformio.exe\" run *)"
     ]
   }
 }

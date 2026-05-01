@@ -13,7 +13,7 @@
 // Recovery mode:
 //   - Tries STA with provided SSID/password
 //   - Falls back to AP mode on failure
-//   - Serves recovery web UI on webPort (default 8080)
+//   - Serves recovery web UI on webPort (default 80)
 //   - Provides: firmware OTA, file management, wireless serial monitor
 
 #include <Arduino.h>
@@ -53,9 +53,11 @@ public:
     uint16_t bootWindowMs  = 3000;   // Boot button watch window
     String   apSSID        = "RECOVERY";  // AP mode SSID
     String   apPassword    = "";     // AP password (empty = open)
-    uint16_t webPort       = 8080;   // Recovery web server port
+    uint16_t webPort       = 80;     // Recovery web server port
     String   staSSID;                // STA SSID (from config)
     String   staPassword;            // STA password (from config)
+    bool     serialMonitorEnabled  = true;   // wired serial output
+    bool     wirelessSerialEnabled = false;  // web serial via WebSocket
 
     void begin();           // Call in setup() — checks triggers, starts recovery if needed
     void loop();            // Call in loop() — handles DNS + serial WS broadcast
@@ -82,5 +84,21 @@ private:
                        String filename, size_t index,
                        uint8_t *data, size_t len, bool final);
     void _broadcastSerial();
+    void _saveWiFiConfig();
     String _getRecoveryHTML();
+
+    // Serial command handlers (one per command; register in _commands[] table)
+    typedef void (RecoveryManager::*CmdFn)(AsyncWebSocketClient*);
+    struct Cmd { const char* name; CmdFn fn; };
+    void _wsHelp(AsyncWebSocketClient* c);
+    void _wsStatus(AsyncWebSocketClient* c);
+    void _wsHeap(AsyncWebSocketClient* c);
+    void _wsReboot(AsyncWebSocketClient* c);
+    void _wsWifi(AsyncWebSocketClient* c);
+    void _wsClear(AsyncWebSocketClient* c);
+    void _wsLs(AsyncWebSocketClient* c);
+    void _wsInfo(AsyncWebSocketClient* c);
+    void _wsScan(AsyncWebSocketClient* c);
+    void _wsDf(AsyncWebSocketClient* c);
+    void _wsReset(AsyncWebSocketClient* c);
 };
