@@ -75,5 +75,12 @@
         "label": "Recovery Mode",
         "type": "bool",
         "direction": "display"
+    },
+    {
+        "name": "errorMessage",
+        "label": "Error",
+        "type": "char",
+        "length": 128,
+        "direction": "display"
     }
 ]

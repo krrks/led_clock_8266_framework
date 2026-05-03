@@ -71,6 +71,10 @@ extern uint32_t  manualBase;
 extern bool     pendingRedraw;
 extern int      scrollOff;
 
+// Error state — set by setError(), cleared by clearError()
+extern char         errorMessage[128];
+extern unsigned long tErrorSet;
+
 // Settings mode state
 extern int           settingsCursor;
 extern int           settingsActive[20];
@@ -91,3 +95,11 @@ extern bool          ledBlinkState;
 // ─── Shared helpers (defined in main.cpp) ─────────────────────────────────
 // Triggers a pending redraw so next flushDisplay() picks up the new brightness.
 void applyBrightness();
+
+// Set an error message, switch to AM_RECOVERY, and log to Serial — no reboot.
+// Safe to call from any module (WeatherFetch, button handlers, etc.).
+// Repeated calls update the message but do NOT reset tErrorSet.
+void setError(const char* msg);
+
+// Clear error state and return to AM_NORMAL. Resets weatherFails counter.
+void clearError();

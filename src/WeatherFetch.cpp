@@ -10,11 +10,7 @@
 
 // ─── Recovery trigger ─────────────────────────────────────────────────────
 void triggerRecovery() {
-    Serial.println("[Recovery] writing RTC flag → restart");
-    RTCData rtc = { RTC_MAGIC, 1 };
-    ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
-    delay(50);
-    ESP.restart();
+    setError("Recovery triggered (legacy call)");
 }
 
 // ─── Weather fetch ────────────────────────────────────────────────────────
@@ -85,7 +81,7 @@ void fetchWeather() {
         Serial.printf("[Weather] network fail %d / %d\n", weatherFails, WEATHER_FAIL_MAX);
         if (weatherFails >= WEATHER_FAIL_MAX) {
             Serial.printf("[Weather] %d consecutive failures → recovery\n", weatherFails);
-            triggerRecovery();
+            setError("Weather: consecutive fetch failures");
         }
     }
 }

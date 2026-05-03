@@ -9,5 +9,6 @@
 // Config errors (401/404/400) do NOT increment the counter.
 void fetchWeather();
 
-// Write recovery flag to RTC memory and reboot.
+// Set error state and switch to AM_RECOVERY — no reboot.
+// (Legacy: previously wrote RTC flag and rebooted.)
 void triggerRecovery();

@@ -77,6 +77,9 @@ uint32_t  manualBase    = 0;
 bool pendingRedraw = false;
 int  scrollOff     = 0;
 
+char         errorMessage[128] = "";
+unsigned long tErrorSet        = 0;
+
 int           settingsCursor = 0;
 int           settingsActive[20];
 int           settingsCount  = 0;
@@ -122,6 +125,33 @@ static void updateStatusLED() {
     }
 }
 
+// ── Error state management ──────────────────────────────────────────────────
+void setError(const char* msg) {
+    strlcpy(errorMessage, msg, sizeof(errorMessage));
+    if (appMode != AM_RECOVERY) tErrorSet = millis();
+    appMode = AM_RECOVERY;
+    scrollOff = 0;
+    pendingRedraw = true;
+    tLastActivity = millis();
+    Serial.printf("\n[ERROR] %s\n[ERROR] heap=%uB uptime=%us\n\n",
+                  msg, ESP.getFreeHeap(), (unsigned int)(millis() / 1000UL));
+}
+
+void clearError() {
+    errorMessage[0] = '\0';
+    tErrorSet = 0;
+    weatherFails = 0;
+    // Clear any stale RTC recovery flag so next boot is clean
+    RTCData rtc = { RTC_MAGIC, 0 };
+    ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
+    appMode = AM_NORMAL;
+    dispMode = DM_CLOCK;
+    scrollOff = 0;
+    pendingRedraw = true;
+    tLastActivity = millis();
+    Serial.println("[Error] cleared — returning to normal mode");
+}
+
 // ── Heartbeat ─────────────────────────────────────────────────────────────
 static const char* dmName(DispMode m) {
     switch (m) {
@@ -155,6 +185,11 @@ static void printHeartbeat() {
                   dmName(dispMode), configManager.data.brightness,
                   curRotation, curFlip, configManager.data.scrollSpeed,
                   wifi.c_str());
+
+    if (appMode == AM_RECOVERY && errorMessage[0]) {
+        unsigned long sec = tErrorSet ? ((millis() - tErrorSet) / 1000UL) : 0;
+        Serial.printf("[Error] active %lus: %s\n", sec, errorMessage);
+    }
 }
 
 // ── Dashboard push ─────────────────────────────────────────────────────────
@@ -184,6 +219,14 @@ static void updateDashboard() {
     dash.data.freeHeap   = (uint32_t)ESP.getFreeHeap();
     dash.data.uptime     = (uint32_t)(millis()/1000UL);
     dash.data.inRecovery = (appMode == AM_RECOVERY);
+
+    if (appMode == AM_RECOVERY && errorMessage[0]) {
+        unsigned long sec = tErrorSet ? ((millis() - tErrorSet) / 1000UL) : 0;
+        Serial.printf("[Dash] RECOVERY active %lus: %s\n", sec, errorMessage);
+    }
+    strlcpy(dash.data.errorMessage,
+            appMode == AM_RECOVERY ? errorMessage : "",
+            sizeof(dash.data.errorMessage));
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -339,6 +382,10 @@ void setup() {
 // loop()
 // ─────────────────────────────────────────────────────────────────────────
 void loop() {
+    // ── Loop guard: feed hardware WDT to prevent spurious reboots ────────
+    ESP.wdtFeed();
+    yield();
+
     if (wifiActive) WiFiManager.loop();
     updater.loop();
     configManager.loop();
@@ -371,7 +418,7 @@ void loop() {
     // ════════════════════════════════════════════════════════════════════
 
     if (appMode == AM_NORMAL) {
-        if      (mVLng) { Serial.println("[Btn] MODE 8 s → recovery"); triggerRecovery(); }
+        if      (mVLng) { Serial.println("[Btn] MODE 8 s → recovery"); setError("Button: MODE 8s hold"); }
         else if (mLng)  {
             Serial.println("[Btn] MODE 3 s → settings");
             appMode = AM_SETTINGS; buildActiveSettings();
@@ -384,7 +431,7 @@ void loop() {
             Serial.printf("[Btn] MODE click → %s\n", dmName(dispMode));
         }
 
-        if      (uVLng) { triggerRecovery(); }
+        if      (uVLng) { setError("Button: UP 8s hold"); }
         else if (uLng) {
             Serial.println("[Btn] UP 3 s → force NTP+wx");
             if (!ntpSynced && timeSync.waitForSyncResult(3000)==0) ntpSynced = true;
@@ -398,7 +445,7 @@ void loop() {
             Serial.printf("[Btn] UP → bright %d\n", b);
         }
 
-        if      (dVLng) { triggerRecovery(); }
+        if      (dVLng) { setError("Button: DOWN 8s hold"); }
         else if (dLng) {
             weatherEnabled = !weatherEnabled;
             configManager.data.defaultWeather = weatherEnabled; configManager.save();
@@ -423,7 +470,7 @@ void loop() {
         if (now - tSettingsEntry >= SETTINGS_TIMEOUT) {
             Serial.println("[Settings] timeout → save"); saveAndExitSettings();
         } else {
-            if      (mVLng) { saveAndExitSettings(); triggerRecovery(); }
+            if      (mVLng) { saveAndExitSettings(); setError("Settings: MODE 8s hold"); }
             else if (mLng)  { Serial.println("[Btn] MODE 3 s → save"); saveAndExitSettings(); }
             else if (mClk && settingsCount > 0) {
                 settingsCursor = (settingsCursor + 1) % settingsCount;
@@ -435,28 +482,26 @@ void loop() {
             else if (uClk)          { if (settingsCount > 0) adjustSetting(settingsActive[settingsCursor], +1); }
             if      (dLng || dVLng) { if (settingsCount > 0) adjustSetting(settingsActive[settingsCursor], -5); }
             else if (dClk)          { if (settingsCount > 0) adjustSetting(settingsActive[settingsCursor], -1); }
-            if      (cVLng) { saveAndExitSettings(); triggerRecovery(); }
+            if      (cVLng) { saveAndExitSettings(); setError("Settings: CONFIRM 8s hold"); }
             else if (cLng)  { Serial.println("[Btn] CONFIRM 3 s → cancel"); cancelAndExitSettings(); }
             else if (cClk)  { Serial.println("[Btn] CONFIRM click → save"); saveAndExitSettings(); }
         }
     }
     else {  // AM_RECOVERY
         if (mLng || mVLng) {
-            Serial.println("[Recovery] BTN1 3 s → clear flag & reboot");
+            Serial.println("[Recovery] BTN1 3 s → reboot (full restart)");
             RTCData rtc = { RTC_MAGIC, 0 };
             ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
             delay(50); ESP.restart();
         }
         if (cClk) {
-            Serial.println("[Recovery] CONFIRM → clear flag & reboot");
-            RTCData rtc = { RTC_MAGIC, 0 };
-            ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
-            delay(50); ESP.restart();
+            Serial.println("[Recovery] CONFIRM → clear error & continue");
+            clearError();
         }
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // Render
+    // Render  (guarded against low-heap crashes)
     // ════════════════════════════════════════════════════════════════════
     {
         bool scrolling = (appMode == AM_RECOVERY)
@@ -466,9 +511,17 @@ void loop() {
                                           : (isIdle ? IDLE_REFRESH : ACTIVE_REFRESH);
         if (pendingRedraw || now - tLastDisplay >= frameMs) {
             pendingRedraw = false; tLastDisplay = now;
-            clearDisplay();
-            switch (appMode) {
-                case AM_RECOVERY: drawScroll("RECOVERY", C_ORANGE);  break;
+
+            // Skip rendering if heap is critically low
+            if (ESP.getFreeHeap() < 2048) {
+                Serial.printf("[Render] low heap %uB — skipping frame\n", ESP.getFreeHeap());
+            } else {
+                clearDisplay();
+                switch (appMode) {
+                case AM_RECOVERY:
+                    if (errorMessage[0]) drawScroll(errorMessage, C_ORANGE);
+                    else                drawScroll("RECOVERY",  C_ORANGE);
+                    break;
                 case AM_SETTINGS: drawSettingsFace();                 break;
                 default:
                     switch (dispMode) {
@@ -480,6 +533,7 @@ void loop() {
                     }
             }
             flushDisplay();
+            } // end heap guard
         }
     }
 
@@ -492,6 +546,7 @@ void loop() {
         }
         if (wifiActive && now - tLastNtp >= NTP_INTERVAL_MS) {
             tLastNtp = now;
+            ESP.wdtFeed();  // NTP sync may block several seconds
             if (timeSync.waitForSyncResult(5000) == 0) {
                 ntpSynced = true; Serial.println("[NTP] re-sync OK");
             }
