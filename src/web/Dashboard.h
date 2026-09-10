@@ -17,7 +17,7 @@ public:
     bool    ntpSynced      = false;
     float   temperature    = 0.0f;
     int16_t weatherCode    = 0;
-    char    weatherDesc[32]= "N/A";
+    char    weatherDesc[40]= "N/A";
     uint32_t freeHeap      = 0;
     uint32_t uptime        = 0;
     bool    inRecovery     = false;
