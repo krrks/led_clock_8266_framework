@@ -20,3 +20,14 @@ required. Features a modular recovery bootloader with wireless serial debugging.
 - **No external framework dependency** — uses ESPAsyncWebServer, ArduinoJson, NeoPixelBus directly
 - **Plain HTML/CSS/JS web UI** — no React/Node build step required
 - **GitHub Actions CI/CD** — auto-builds firmware + LittleFS image on push/release
+
+## Recovery Module Roadmap
+
+The recovery module ([src/recovery/](src/recovery/)) is designed to be
+**framework-independent and reusable** in other ESP8266/ESP32 projects: it ships
+its own web UI (OTA update, file management, wireless serial monitor) and has no
+dependency on clock-specific code.
+
+It is currently maintained on the `feature/modular-recovery-bootloader` branch.
+**Planned:** extract the module into a standalone repository/library so other
+projects can depend on it directly — keep that branch until the split is done.
