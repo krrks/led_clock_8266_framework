@@ -67,7 +67,7 @@ bool    wifiActive     = false;
 
 int16_t weatherCode    = 0;
 float   weatherTemp    = 0.0f;
-char    weatherDesc[32]= "N/A";
+char    weatherDesc[40]= "N/A";
 int     weatherFails   = 0;
 
 uint8_t  curRotation   = 0;

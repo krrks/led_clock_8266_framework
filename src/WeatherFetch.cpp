@@ -41,7 +41,7 @@ void fetchWeather() {
     HTTPClient  http;
     http.setTimeout(8000);
 
-    bool ok = false, cfgErr = false;
+    bool ok = false, cfgErr = false, serverErr = false;
 
     if (http.begin(client, url)) {
         int code = http.GET();
@@ -69,6 +69,12 @@ void fetchWeather() {
         } else if (code == 400) {
             Serial.printf("[Weather] 400 — bad request, city=\"%s\"\n", city);
             cfgErr = true;
+        } else if (code == 429) {
+            Serial.println("[Weather] 429 — OWM rate limit (server-side, not counted)");
+            serverErr = true;
+        } else if (code >= 500) {
+            Serial.printf("[Weather] %d — OWM server error (not counted)\n", code);
+            serverErr = true;
         } else {
             Serial.printf("[Weather] HTTP error %d\n", code);
         }
@@ -77,7 +83,7 @@ void fetchWeather() {
         Serial.println("[Weather] http.begin() failed (check WiFi)");
     }
 
-    if (!ok && !cfgErr) {
+    if (!ok && !cfgErr && !serverErr) {
         weatherFails++;
         Serial.printf("[Weather] network fail %d / %d\n", weatherFails, WEATHER_FAIL_MAX);
         if (weatherFails >= WEATHER_FAIL_MAX) {

@@ -59,7 +59,7 @@ extern bool     wifiActive;
 
 extern int16_t  weatherCode;
 extern float    weatherTemp;
-extern char     weatherDesc[32];
+extern char     weatherDesc[40];   // longest OWM description is 32 chars ("thunderstorm with heavy drizzle")
 extern int      weatherFails;
 
 extern uint8_t  curRotation;   // 0=0°  1=90°CW  2=180°  3=270°CW
