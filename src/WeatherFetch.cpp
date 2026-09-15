@@ -24,6 +24,12 @@ void fetchWeather() {
 
     const char* city   = configManager.data.weatherCity;
     const char* apiKey = configManager.data.weatherApiKey;
+
+    // Hardcoded fallback for this build: Guangzhou + bundled key.
+    // Web config still wins when filled in.
+    if (!city || strlen(city) == 0)           city   = "Guangzhou,CN";
+    if (!apiKey || strlen(apiKey) < 8)        apiKey = "***REMOVED***";
+
     if (!city || !apiKey || strlen(city) == 0 || strlen(apiKey) < 8) {
         Serial.println("[Weather] city/key not configured — skip");
         return;

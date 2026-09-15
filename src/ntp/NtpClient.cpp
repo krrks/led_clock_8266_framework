@@ -10,17 +10,19 @@ static bool s_synced = false;
 
 static void ntpCallback() {
     s_synced = true;
-    timeSync.begin(nullptr);  // re-apply after sync (no-op with null)
 }
 
 void NtpClient::begin(const char* timezone) {
-    if (timezone && strlen(timezone) > 0) {
-        setenv("TZ", timezone, 1);
-        tzset();
-        Serial.printf("[NTP] tz=%s\n", timezone);
-    }
     settimeofday_cb(ntpCallback);
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov", "ntp.ubuntu.com");
+    if (timezone && strlen(timezone) > 0) {
+        // Use the string overload: it sets TZ *before* starting SNTP.
+        // The int overload configTime(0,0,...) would clobber newlib's
+        // _timezone to UTC on ESP8266 core 3.x (observed: localtime() = UTC).
+        configTime(timezone, "pool.ntp.org", "time.nist.gov", "ntp.ubuntu.com");
+        Serial.printf("[NTP] tz=%s\n", timezone);
+    } else {
+        configTime(0, 0, "pool.ntp.org", "time.nist.gov", "ntp.ubuntu.com");
+    }
 }
 
 int NtpClient::waitForSyncResult(unsigned long timeoutMs) {

@@ -90,7 +90,7 @@ unsigned long tLastWeather  = 0;
 unsigned long tLastDash     = 0;
 unsigned long tLastActivity = 0;
 unsigned long tLastHeart    = 0;
-unsigned long tShowIPUntil  = 0;
+unsigned long tFaceUntil    = 0;
 unsigned long tLedBlink     = 0;
 bool          ledBlinkState = false;
 
@@ -319,7 +319,7 @@ void setup() {
             fetchWeather();
         }
         if (wifiOK && appMode == AM_NORMAL) {
-            dispMode = DM_IP; tShowIPUntil = millis() + IP_SHOW_MS; scrollOff = 0;
+            dispMode = DM_IP; tFaceUntil = millis() + FACE_TIMEOUT_MS; scrollOff = 0;
         }
     } else {
         WiFi.mode(WIFI_OFF); WiFi.forceSleepBegin();
@@ -371,10 +371,10 @@ void loop() {
     if (wifiActive && webServer.wsDashboard().count() > 0) tLastActivity = now;
     bool isIdle = (now - tLastActivity > IDLE_TIMEOUT_MS);
 
-    // ── Auto-return from IP ───────────────────────────────────────────────
-    if (tShowIPUntil > 0 && now >= tShowIPUntil && dispMode == DM_IP) {
-        tShowIPUntil = 0; dispMode = DM_CLOCK; scrollOff = 0;
-        pendingRedraw = true; Serial.println("[IP] auto-return to clock");
+    // ── Auto-return to clock from any other face ──────────────────────────
+    if (tFaceUntil > 0 && now >= tFaceUntil && dispMode != DM_CLOCK) {
+        tFaceUntil = 0; dispMode = DM_CLOCK; scrollOff = 0;
+        pendingRedraw = true; Serial.println("[Disp] auto-return to clock");
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -391,7 +391,8 @@ void loop() {
         }
         else if (mClk) {
             dispMode = (DispMode)((dispMode + 1) % DM_COUNT);
-            tShowIPUntil = 0; scrollOff = 0; pendingRedraw = true;
+            tFaceUntil = (dispMode == DM_CLOCK) ? 0 : now + FACE_TIMEOUT_MS;
+            scrollOff = 0; pendingRedraw = true;
             Serial.printf("[Btn] MODE click → %s\n", dmName(dispMode));
         }
 
@@ -426,7 +427,7 @@ void loop() {
 
         if (cClk) {
             dispMode = DM_IP; scrollOff = 0;
-            tShowIPUntil = now + IP_SHOW_MS; pendingRedraw = true;
+            tFaceUntil = now + FACE_TIMEOUT_MS; pendingRedraw = true;
             Serial.println("[Btn] CONFIRM → show IP");
         }
     }

@@ -14,15 +14,15 @@ const configData configDefaults PROGMEM = {
     255, // brightBrt
     true, // use24h
     0,   // rotation
-    0,   // flip
+    2,   // flip (hardcoded V-flip in ClockDisplay.cpp, kept for reference)
     80,  // scrollSpeed
     "HKT-8",
     true, // wifiEnabled
     "",   // wifiSSID
     "",   // wifiPassword
     true, // defaultWeather
-    "",   // weatherApiKey
-    "Hong Kong",
+    "***REMOVED***",  // weatherApiKey (hardcoded fallback in WeatherFetch.cpp)
+    "Guangzhou,CN",
     12, 0, 1, 1, 2025, 1,
     true,  // serialMonitorEnabled
     false  // wirelessSerialEnabled

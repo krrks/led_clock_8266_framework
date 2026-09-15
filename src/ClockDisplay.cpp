@@ -88,8 +88,9 @@ static void applyOrientation(uint32_t src[MATRIX_HEIGHT][MATRIX_WIDTH],
                     sr = r; sc = c;
                     break;
             }
-            if (curFlip == 1) sc = MATRIX_WIDTH  - 1 - sc; // H-Flip
-            if (curFlip == 2) sr = MATRIX_HEIGHT - 1 - sr; // V-Flip
+            // Hardcoded vertical mirror (top↔bottom) — panel is mounted
+            // upside-down. configManager.data.flip is ignored.
+            sr = MATRIX_HEIGHT - 1 - sr;
             dst[r][c] = src[sr][sc];
         }
     }
@@ -146,9 +147,12 @@ void flushDisplay() {
     uint8_t bri = getCurrentBrightness();
 
     for (int i = 0; i < NUM_LEDS; i++) {
-        uint8_t r = (uint8_t)(((buf[i] >> 16) & 0xFF) * (uint16_t)bri / 255u);
-        uint8_t g = (uint8_t)(((buf[i] >>  8) & 0xFF) * (uint16_t)bri / 255u);
-        uint8_t b = (uint8_t)(( buf[i]         & 0xFF) * (uint16_t)bri / 255u);
+        // +127 rounds instead of flooring: at very low brightness (dim=1)
+        // plain truncation turns 0xCC..0xDD components into 0, hiding
+        // non-white faces (date/temp/IP) entirely.
+        uint8_t r = (uint8_t)((((buf[i] >> 16) & 0xFF) * (uint16_t)bri + 127u) / 255u);
+        uint8_t g = (uint8_t)((((buf[i] >>  8) & 0xFF) * (uint16_t)bri + 127u) / 255u);
+        uint8_t b = (uint8_t)((( buf[i]         & 0xFF) * (uint16_t)bri + 127u) / 255u);
         neoStrip.SetPixelColor(i, RgbColor(r, g, b));
     }
     neoStrip.Show();
@@ -192,16 +196,12 @@ void drawClockFace() {
 }
 
 void drawDateFace() {
-    static const char* MON[] = {
-        "JAN","FEB","MAR","APR","MAY","JUN",
-        "JUL","AUG","SEP","OCT","NOV","DEC"
-    };
     struct tm t = {};
     char s[12];
-    if (getCurrentTime(t)) snprintf(s, sizeof(s), "%02d%s", t.tm_mday, MON[t.tm_mon]);
+    if (getCurrentTime(t)) snprintf(s, sizeof(s), "%02d-%02d", t.tm_mon + 1, t.tm_mday);
     else                    strlcpy(s, "NODATE", sizeof(s));
     int w = strPxW(s);
-    drawStr(s, max(0, (MATRIX_WIDTH - w) / 2), C_GREEN);
+    drawStr(s, max(0, (MATRIX_WIDTH - w) / 2), C_WHITE);
 }
 
 void drawTempFace() {
@@ -211,7 +211,7 @@ void drawTempFace() {
     else
         strlcpy(s, "WX OFF", sizeof(s));
     int w = strPxW(s);
-    drawStr(s, max(0, (MATRIX_WIDTH - w) / 2), C_YELLOW);
+    drawStr(s, max(0, (MATRIX_WIDTH - w) / 2), C_WHITE);
 }
 
 void drawIPFace() {
@@ -224,5 +224,5 @@ void drawIPFace() {
         else
             strlcpy(ipBuf, "NO WIFI", sizeof(ipBuf));
     }
-    drawScroll(ipBuf, C_CYAN);
+    drawScroll(ipBuf, C_WHITE);
 }

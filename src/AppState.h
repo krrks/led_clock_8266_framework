@@ -16,7 +16,7 @@ static const unsigned long NTP_INTERVAL_MS  = 3600000UL;
 static const unsigned long WEATHER_INT_MS   = 3600000UL;
 static const int           DASH_INT_MS      = 5000;
 static const unsigned long HEARTBEAT_MS     = 60000UL;
-static const unsigned long IP_SHOW_MS       = 8000UL;
+static const unsigned long FACE_TIMEOUT_MS  = 8000UL;  // non-clock faces auto-return to clock after this
 static const unsigned long SETTINGS_TIMEOUT = 30000UL;
 static const int           WEATHER_FAIL_MAX = 5;
 
@@ -84,7 +84,7 @@ extern unsigned long tLastWeather;
 extern unsigned long tLastDash;
 extern unsigned long tLastActivity;
 extern unsigned long tLastHeart;
-extern unsigned long tShowIPUntil;
+extern unsigned long tFaceUntil;
 extern unsigned long tLedBlink;
 extern bool          ledBlinkState;
 
