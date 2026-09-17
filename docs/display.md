@@ -13,66 +13,86 @@ Col 14-18  Minute tens digit
 Col 19     space
 Col 20-24  Minute units digit
 Col 25     gap
-Col 26     DATE column   (1px per 7-day week, white, bottom->top)
-Col 27     gap
-Col 28     WEEKDAY column (Mon=1px...Sun=7px, cyan weekday / orange weekend)
-Col 29     gap
-Col 30     WEATHER column (4px, colour = OWM condition)
-Col 31     trailing pad
+Col 26-31  WEATHER icon (6×7, clock mode only)
+Row 7      DAY indicator (clock mode only): column = day of month,
+           colour = weekday group (see below)
 ```
-
-Columns 26-30 are "info bars" that provide context at a glance.
 
 ## Display Modes
 
-Press **BTN1 (MODE)** to cycle:
+Press **BTN1 (MODE)** to cycle. All text uses the selected theme colour
+(see [Monochrome Theme](#monochrome-theme)):
 
-| Mode  | Content | Colour |
-|-------|---------|--------|
-| CLOCK | HH:MM + info bars (default) | White + colour bars |
-| DATE  | Static date, e.g. `22APR` | Green |
-| TEMP  | Static temperature, e.g. `25.1C` | Yellow |
-| IP    | Scrolling WiFi IP or "NO WIFI" | Cyan |
+| Mode  | Content | Notes |
+|-------|---------|-------|
+| CLOCK | HH:MM + weather icon + day indicator | Default |
+| DATE  | Static date `MM-DD`, e.g. `09-17` | |
+| TEMP  | Static temperature, e.g. `25.1C` | |
+| IP    | Paged IP, width-fit, e.g. `192.` → `168.` → `3.47` | 3 s per page |
 
-After boot WiFi connect, IP mode is shown for 8 seconds, then returns to CLOCK.
+Non-clock modes auto-return to CLOCK after 8 seconds. After boot WiFi
+connect, IP mode is shown for 8 seconds, then returns to CLOCK.
+
+## Day Indicator (row 7)
+
+A single pixel on the bottom row of the clock face:
+
+- **Column** = day of month (1st → col 0 … 31st → col 30)
+- **Colour** = weekday group: Mon/Tue **green**, Wed/Thu **blue**,
+  Fri/Sat/Sun **red**
+
+## Weather Icon (cols 26-31)
+
+6×7 glyph drawn in the theme colour, mapped from OWM condition code:
+
+| Glyph | Condition | OWM Code Range |
+|-------|-----------|----------------|
+| Sun | Clear | 800 |
+| Small cloud | Few clouds | 801 |
+| Cloud | Scattered | 802 |
+| Big cloud | Broken / overcast | 803-804 |
+| Cloud + 2 drops | Shower / drizzle | 300-321 |
+| Cloud + 3 drops | Rain | 500-531 |
+| Cloud + bolt | Thunderstorm | 200-232 |
+| Cloud + dots | Snow | 600-622 |
+| Lines | Mist / fog / haze | 700-781 |
+
+Icon is off when weather is disabled or no data (code 0).
+
+## Monochrome Theme
+
+All faces (clock, date, temp, IP, weather icon) share one theme colour,
+cycled with **BTN3** and persisted in `colorIndex` config (also editable
+on the web Settings page):
+
+| Index | Colour |
+|-------|--------|
+| 0 | White (default) |
+| 1 | Warm yellow |
+| 2 | Red |
+| 3 | Green |
+| 4 | Cyan |
+| 5 | Blue |
+| 6 | Orange |
+| 7 | Purple |
+
+The day indicator keeps its own weekday colouring regardless of theme.
 
 ## Display Orientation
 
-Rotation and flip are **independent** and **combinable**:
+Rotation is configurable (web or on-device settings). **Flip is hardcoded**
+to V-flip in `ClockDisplay.cpp` (`applyOrientation`) — the panel is mounted
+upside-down; the config `flip` value is ignored.
 
-**Rotation:**
-| Value | Label | Description |
-|-------|-------|-------------|
+| Rotation | Label | Description |
+|----------|-------|-------------|
 | 0 | 0° | Standard horizontal mount |
 | 1 | 90°CW | Portrait (scaled) |
 | 2 | 180° | Upside-down |
 | 3 | 270°CW | Portrait, other way |
 
-**Flip:**
-| Value | Label | Description |
-|-------|-------|-------------|
-| 0 | None | No mirroring |
-| 1 | H-Flip | Mirror left-right |
-| 2 | V-Flip | Mirror top-bottom |
-
-Both can be set via web Configuration or on-device settings mode.
-
-## Weather Colours
-
-| Condition     | OWM Code Range | LED Colour  |
-|---------------|----------------|-------------|
-| Thunderstorm  | 200-299        | Purple      |
-| Drizzle       | 300-399        | Light blue  |
-| Rain          | 500-599        | Blue        |
-| Snow          | 600-699        | Icy blue    |
-| Fog / mist    | 700-799        | Grey        |
-| Clear sky     | 800            | Yellow      |
-| Few/scattered | 801-802        | Pale yellow |
-| Overcast      | 803-804        | Grey        |
-
-Full code list: <https://openweathermap.org/weather-conditions>
-
 ## Scroll Speed
 
-Controls all scrolling text animation (IP address, recovery text, settings items wider than matrix).
-Range: 30-200 ms/column. Default: 80 ms/column. Adjustable via web or on-device settings.
+Controls all scrolling text animation (recovery text, settings items wider
+than matrix). Range: 30-200 ms/column. Default: 80 ms/column. Adjustable
+via web or on-device settings.

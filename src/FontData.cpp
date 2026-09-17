@@ -76,13 +76,14 @@ const uint8_t LOWERCASE_FONT[26][5] = {
 };
 
 // 标点符号字模 (统一为1列宽度，组合成二维数组)
-const uint8_t PUNCTUATION_FONT[6][1] = {
+const uint8_t PUNCTUATION_FONT[7][1] = {
     {0x14},     // 0: 冒号 (1x7)
     {0x5F},     // 1: 感叹号 (1x7)
     {0x06},     // 2: 单引号 (1x7)
     {0x40},     // 3: 句点 (1x7)
     {0x40},     // 4: 点 (1x7) - 与句点相同
-    {0x00}      // 5: 空格 (1x7)
+    {0x00},     // 5: 空格 (1x7)
+    {0x08}      // 6: 连字符 (1x7) - 中间一横
 };
 
 // 标点符号映射表
@@ -91,7 +92,8 @@ const PunctuationMap PUNCTUATION_MAP[] = {
     {'!',  PUNCT_EXCLAMATION_INDEX,   1},
     {'\'', PUNCT_SINGLE_QUOTE_INDEX,  1},
     {'.',  PUNCT_PERIOD_INDEX,        1},
-    {' ',  PUNCT_SPACE_INDEX,         1}
+    {' ',  PUNCT_SPACE_INDEX,         1},
+    {'-',  PUNCT_DASH_INDEX,          1}
 };
 
 const uint8_t PUNCTUATION_MAP_COUNT = sizeof(PUNCTUATION_MAP) / sizeof(PunctuationMap);

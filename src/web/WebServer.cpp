@@ -279,6 +279,7 @@ void WebServer::_handleConfigGet(AsyncWebServerRequest* req) {
     doc["rotation"]     = d.rotation;
     doc["flip"]         = d.flip;
     doc["scrollSpeed"]  = d.scrollSpeed;
+    doc["colorIndex"]   = d.colorIndex;
     doc["timezone"]     = d.timezone;
     doc["wifiEnabled"]  = d.wifiEnabled;
     doc["wifiSSID"]     = d.wifiSSID;
@@ -319,6 +320,7 @@ void WebServer::_handleConfigPost(AsyncWebServerRequest* req) {
     GET_PARAM("rotation",    d.rotation,      toInt());
     GET_PARAM("flip",        d.flip,          toInt());
     GET_PARAM("scrollSpeed", d.scrollSpeed,   toInt());
+    GET_PARAM("colorIndex",  d.colorIndex,    toInt());
     GET_STR("timezone",      d.timezone,      sizeof(d.timezone));
     GET_PARAM("wifiEnabled", d.wifiEnabled,   equalsIgnoreCase("true"));
     GET_STR("wifiSSID",      d.wifiSSID,      sizeof(d.wifiSSID));

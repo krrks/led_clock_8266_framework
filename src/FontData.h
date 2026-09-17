@@ -23,7 +23,7 @@ extern const uint8_t LETTER_FONT[26][5];
 extern const uint8_t LOWERCASE_FONT[26][5];
 
 // 标点符号字模 (统一为1列宽度，组合成二维数组)
-extern const uint8_t PUNCTUATION_FONT[6][1];  // 所有标点符号组合
+extern const uint8_t PUNCTUATION_FONT[7][1];  // 所有标点符号组合
 
 // 标点符号索引定义
 #define PUNCT_COLON_INDEX 0
@@ -32,6 +32,7 @@ extern const uint8_t PUNCTUATION_FONT[6][1];  // 所有标点符号组合
 #define PUNCT_PERIOD_INDEX 3
 #define PUNCT_DOT_INDEX 4
 #define PUNCT_SPACE_INDEX 5
+#define PUNCT_DASH_INDEX 6
 
 // 标点符号映射结构
 struct PunctuationMap {

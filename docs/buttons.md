@@ -16,11 +16,11 @@
 | **BTN1 click** | Cycle display mode | CLOCK → DATE → TEMP → IP |
 | **BTN1 3s** | Enter settings | Opens on-device settings editor |
 | **BTN1 8s** | Enter recovery | Triggers recovery mode |
-| **BTN2 click** | Brightness up | +1 step (dim→med→bright) |
+| **BTN2 click** | Brightness cycle | dim → med → bright → dim |
 | **BTN2 3s** | Force refresh | NTP re-sync + weather re-fetch |
-| **BTN3 click** | Brightness down | -1 step |
+| **BTN3 click** | Colour cycle | 8 monochrome presets: white → warm yellow → red → green → cyan → blue → orange → purple |
 | **BTN3 3s** | Toggle weather | Enable/disable weather display |
-| **BTN4 click** | Show IP | Scrolling IP for 8 seconds |
+| **BTN4 click** | Show IP | Paged IP for 8 seconds |
 
 ## Settings Mode
 

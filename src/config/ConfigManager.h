@@ -17,6 +17,7 @@ struct configData {
     uint8_t rotation;         // 0=0°, 1=90°CW, 2=180°, 3=270°CW
     uint8_t flip;             // 0=none, 1=H-flip, 2=V-flip
     uint8_t scrollSpeed;      // ms per column (30-200)
+    uint8_t colorIndex;       // 0-7 → COLOR_PRESETS monochrome theme
     char    timezone[48];
     bool    wifiEnabled;
     char    wifiSSID[33];

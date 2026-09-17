@@ -68,6 +68,7 @@ bool    wifiActive     = false;
 int16_t weatherCode    = 0;
 float   weatherTemp    = 0.0f;
 char    weatherDesc[40]= "N/A";
+uint32_t mainColor     = 0xFFFFFF;
 int     weatherFails   = 0;
 
 uint8_t  curRotation   = 0;
@@ -319,7 +320,8 @@ void setup() {
             fetchWeather();
         }
         if (wifiOK && appMode == AM_NORMAL) {
-            dispMode = DM_IP; tFaceUntil = millis() + FACE_TIMEOUT_MS; scrollOff = 0;
+            dispMode = DM_IP; scrollOff = 0;
+            resetIpPages(); tFaceUntil = millis() + ipFaceTimeoutMs();
         }
     } else {
         WiFi.mode(WIFI_OFF); WiFi.forceSleepBegin();
@@ -353,6 +355,7 @@ void loop() {
     if (wifiActive) ArduinoOTA.handle();
     // updater.loop();  // handled by webServer now
     configManager.loop();
+    mainColor = COLOR_PRESETS[configManager.data.colorIndex % 8];
     dash.loop();
 
     unsigned long now = millis();
@@ -391,7 +394,12 @@ void loop() {
         }
         else if (mClk) {
             dispMode = (DispMode)((dispMode + 1) % DM_COUNT);
-            tFaceUntil = (dispMode == DM_CLOCK) ? 0 : now + FACE_TIMEOUT_MS;
+            if (dispMode == DM_IP) {
+                resetIpPages();
+                tFaceUntil = now + ipFaceTimeoutMs();
+            } else {
+                tFaceUntil = (dispMode == DM_CLOCK) ? 0 : now + FACE_TIMEOUT_MS;
+            }
             scrollOff = 0; pendingRedraw = true;
             Serial.printf("[Btn] MODE click → %s\n", dmName(dispMode));
         }
@@ -418,16 +426,16 @@ void loop() {
             Serial.printf("[Btn] DOWN 3 s → weather %s\n", weatherEnabled?"ON":"OFF");
         }
         else if (dClk) {
-            uint8_t b = (configManager.data.brightness == 0) ? 2
-                        : configManager.data.brightness - 1;
-            configManager.data.brightness = b; configManager.save();
-            applyBrightness(); pendingRedraw = true;
-            Serial.printf("[Btn] DOWN → bright %d\n", b);
+            uint8_t c = (configManager.data.colorIndex + 1) % 8;
+            configManager.data.colorIndex = c; configManager.save();
+            pendingRedraw = true;
+            Serial.printf("[Btn] DOWN → colour %d (0x%06X)\n", c, COLOR_PRESETS[c]);
         }
 
         if (cClk) {
             dispMode = DM_IP; scrollOff = 0;
-            tFaceUntil = now + FACE_TIMEOUT_MS; pendingRedraw = true;
+            resetIpPages();
+            tFaceUntil = now + ipFaceTimeoutMs(); pendingRedraw = true;
             Serial.println("[Btn] CONFIRM → show IP");
         }
     }

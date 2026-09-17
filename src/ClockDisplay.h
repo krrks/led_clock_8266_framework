@@ -10,7 +10,6 @@
 
 // Colour helpers
 uint32_t mkRgb(uint8_t r, uint8_t g, uint8_t b);
-uint32_t wxColor(int16_t code);   // OWM condition code → display colour
 
 // Shared colour constants (defined in ClockDisplay.cpp)
 extern const uint32_t C_WHITE;
@@ -32,3 +31,8 @@ void drawClockFace();
 void drawDateFace();
 void drawTempFace();
 void drawIPFace();
+
+// IP paged display — called when entering the IP face so the auto-return
+// timer can cover a full page cycle.
+void resetIpPages();
+unsigned long ipFaceTimeoutMs();   // nPages * PAGE_IP_MS

@@ -6,6 +6,18 @@
 #include <time.h>
 #include "LEDMatrixLayout.h"
 
+// ─── Monochrome theme presets (indexed by configManager.data.colorIndex) ──
+static const uint32_t COLOR_PRESETS[8] = {
+    0xFFFFFF,  // 0 white (default)
+    0xFFC800,  // 1 warm yellow
+    0xFF0000,  // 2 red
+    0x00CC00,  // 3 green
+    0x00CCCC,  // 4 cyan
+    0x0066FF,  // 5 blue
+    0xFF6600,  // 6 orange
+    0x8800CC,  // 7 purple
+};
+
 // ─── Compile-time constants ───────────────────────────────────────────────
 static const unsigned long BOOT_WINDOW_MS   = 3000UL;
 static const unsigned long IDLE_TIMEOUT_MS  = 30000UL;
@@ -17,6 +29,7 @@ static const unsigned long WEATHER_INT_MS   = 3600000UL;
 static const int           DASH_INT_MS      = 5000;
 static const unsigned long HEARTBEAT_MS     = 60000UL;
 static const unsigned long FACE_TIMEOUT_MS  = 8000UL;  // non-clock faces auto-return to clock after this
+static const unsigned long PAGE_IP_MS       = 3000UL;  // IP paged display: ms per page
 static const unsigned long SETTINGS_TIMEOUT = 30000UL;
 static const int           WEATHER_FAIL_MAX = 5;
 
@@ -56,6 +69,8 @@ extern DispMode dispMode;
 extern bool     ntpSynced;
 extern bool     weatherEnabled;
 extern bool     wifiActive;
+
+extern uint32_t mainColor;   // current theme colour (COLOR_PRESETS[colorIndex])
 
 extern int16_t  weatherCode;
 extern float    weatherTemp;

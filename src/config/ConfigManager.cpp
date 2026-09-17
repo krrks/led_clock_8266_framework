@@ -10,12 +10,13 @@ const configData configDefaults PROGMEM = {
     "en",
     0,   // brightness (dim)
     1,   // brightDim
-    128, // brightMed
+    16,  // brightMed
     255, // brightBrt
     true, // use24h
     0,   // rotation
     2,   // flip (hardcoded V-flip in ClockDisplay.cpp, kept for reference)
     80,  // scrollSpeed
+    0,   // colorIndex (COLOR_PRESETS[0] = white)
     "HKT-8",
     true, // wifiEnabled
     "",   // wifiSSID
@@ -62,31 +63,43 @@ bool ConfigManager::loadFromFS() {
         return false;
     }
 
-    strlcpy(data.projectName,      doc["projectName"]      | configDefaults.projectName,    sizeof(data.projectName));
-    strlcpy(data.language,         doc["language"]         | configDefaults.language,       sizeof(data.language));
-    data.brightness      = doc["brightness"]      | configDefaults.brightness;
-    data.brightDim       = doc["brightDim"]       | configDefaults.brightDim;
-    data.brightMed       = doc["brightMed"]       | configDefaults.brightMed;
-    data.brightBrt       = doc["brightBrt"]       | configDefaults.brightBrt;
-    data.use24h          = doc["use24h"]          | configDefaults.use24h;
-    data.rotation        = doc["rotation"]        | configDefaults.rotation;
-    data.flip            = doc["flip"]            | configDefaults.flip;
-    data.scrollSpeed     = doc["scrollSpeed"]     | configDefaults.scrollSpeed;
-    strlcpy(data.timezone,        doc["timezone"]        | configDefaults.timezone,        sizeof(data.timezone));
-    data.wifiEnabled     = doc["wifiEnabled"]     | configDefaults.wifiEnabled;
-    strlcpy(data.wifiSSID,        doc["wifiSSID"]        | configDefaults.wifiSSID,        sizeof(data.wifiSSID));
-    strlcpy(data.wifiPassword,    doc["wifiPassword"]    | configDefaults.wifiPassword,    sizeof(data.wifiPassword));
-    data.defaultWeather  = doc["defaultWeather"]  | configDefaults.defaultWeather;
-    strlcpy(data.weatherApiKey,   doc["weatherApiKey"]   | configDefaults.weatherApiKey,   sizeof(data.weatherApiKey));
-    strlcpy(data.weatherCity,     doc["weatherCity"]     | configDefaults.weatherCity,     sizeof(data.weatherCity));
-    data.manualHour      = doc["manualHour"]      | configDefaults.manualHour;
-    data.manualMinute    = doc["manualMinute"]    | configDefaults.manualMinute;
-    data.manualDay       = doc["manualDay"]       | configDefaults.manualDay;
-    data.manualMonth     = doc["manualMonth"]     | configDefaults.manualMonth;
-    data.manualYear      = doc["manualYear"]      | configDefaults.manualYear;
-    data.manualWeekday   = doc["manualWeekday"]   | configDefaults.manualWeekday;
-    data.serialMonitorEnabled  = doc["serialMonitor"]  | configDefaults.serialMonitorEnabled;
-    data.wirelessSerialEnabled = doc["wirelessSerial"] | configDefaults.wirelessSerialEnabled;
+    // IMPORTANT: defaults come from `data` (RAM copy of configDefaults made in
+    // begin()), never from configDefaults (PROGMEM) directly. ArduinoJson
+    // dereferences the default value when a key is missing, and byte loads
+    // from flash crash with LoadStoreError on ESP8266.
+    #define LOAD_STR(key, field) do { \
+        const char* _v = doc[key] | (const char*)nullptr; \
+        if (_v) strlcpy(field, _v, sizeof(field)); \
+    } while (0)
+
+    LOAD_STR("projectName",   data.projectName);
+    LOAD_STR("language",      data.language);
+    data.brightness     = doc["brightness"]     | data.brightness;
+    data.brightDim      = doc["brightDim"]      | data.brightDim;
+    data.brightMed      = doc["brightMed"]      | data.brightMed;
+    data.brightBrt      = doc["brightBrt"]      | data.brightBrt;
+    data.use24h         = doc["use24h"]         | data.use24h;
+    data.rotation       = doc["rotation"]       | data.rotation;
+    data.flip           = doc["flip"]           | data.flip;
+    data.scrollSpeed    = doc["scrollSpeed"]    | data.scrollSpeed;
+    data.colorIndex     = doc["colorIndex"]     | data.colorIndex;
+    LOAD_STR("timezone",       data.timezone);
+    data.wifiEnabled    = doc["wifiEnabled"]    | data.wifiEnabled;
+    LOAD_STR("wifiSSID",       data.wifiSSID);
+    LOAD_STR("wifiPassword",   data.wifiPassword);
+    data.defaultWeather = doc["defaultWeather"] | data.defaultWeather;
+    LOAD_STR("weatherApiKey",  data.weatherApiKey);
+    LOAD_STR("weatherCity",    data.weatherCity);
+    data.manualHour     = doc["manualHour"]     | data.manualHour;
+    data.manualMinute   = doc["manualMinute"]   | data.manualMinute;
+    data.manualDay      = doc["manualDay"]      | data.manualDay;
+    data.manualMonth    = doc["manualMonth"]    | data.manualMonth;
+    data.manualYear     = doc["manualYear"]     | data.manualYear;
+    data.manualWeekday  = doc["manualWeekday"]  | data.manualWeekday;
+    data.serialMonitorEnabled  = doc["serialMonitor"]  | data.serialMonitorEnabled;
+    data.wirelessSerialEnabled = doc["wirelessSerial"] | data.wirelessSerialEnabled;
+
+    #undef LOAD_STR
 
     return true;
 }
@@ -104,6 +117,7 @@ bool ConfigManager::saveToFS() {
     doc["rotation"]        = data.rotation;
     doc["flip"]            = data.flip;
     doc["scrollSpeed"]     = data.scrollSpeed;
+    doc["colorIndex"]      = data.colorIndex;
     doc["timezone"]        = data.timezone;
     doc["wifiEnabled"]     = data.wifiEnabled;
     doc["wifiSSID"]        = data.wifiSSID;
