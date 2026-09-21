@@ -7,3 +7,5 @@ src/generated/
 *.elf
 __pycache__/
 *.pyc
+tools/key
+src/config/Secrets.h

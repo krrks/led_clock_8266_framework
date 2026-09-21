@@ -9,6 +9,14 @@
 #include "wifi/WiFiService.h"
 #include "config/ConfigManager.h"
 
+// Local-only secrets (gitignored); public clones fall back to empty key.
+#if __has_include("config/Secrets.h")
+#include "config/Secrets.h"
+#endif
+#ifndef WEATHER_API_KEY
+#define WEATHER_API_KEY ""
+#endif
+
 // ─── Recovery trigger ─────────────────────────────────────────────────────
 void triggerRecovery() {
     RecoveryManager::get().trigger();
@@ -25,10 +33,10 @@ void fetchWeather() {
     const char* city   = configManager.data.weatherCity;
     const char* apiKey = configManager.data.weatherApiKey;
 
-    // Hardcoded fallback for this build: Guangzhou + bundled key.
-    // Web config still wins when filled in.
+    // Fallback for this build: Guangzhou + key from local Secrets.h
+    // (empty in public builds — weather then stays off until configured).
     if (!city || strlen(city) == 0)           city   = "Guangzhou,CN";
-    if (!apiKey || strlen(apiKey) < 8)        apiKey = "***REMOVED***";
+    if (!apiKey || strlen(apiKey) < 8)        apiKey = WEATHER_API_KEY;
 
     if (!city || !apiKey || strlen(city) == 0 || strlen(apiKey) < 8) {
         Serial.println("[Weather] city/key not configured — skip");

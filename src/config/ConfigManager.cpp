@@ -3,6 +3,14 @@
 #include "LittleFS.h"
 #include <ArduinoJson.h>
 
+// Local-only secrets (gitignored); public clones fall back to empty key.
+#if __has_include("Secrets.h")
+#include "Secrets.h"
+#endif
+#ifndef WEATHER_API_KEY
+#define WEATHER_API_KEY ""
+#endif
+
 static const char* CONFIG_PATH = "/config.json";
 
 const configData configDefaults PROGMEM = {
@@ -22,7 +30,7 @@ const configData configDefaults PROGMEM = {
     "",   // wifiSSID
     "",   // wifiPassword
     true, // defaultWeather
-    "***REMOVED***",  // weatherApiKey (hardcoded fallback in WeatherFetch.cpp)
+    WEATHER_API_KEY,  // weatherApiKey (from local Secrets.h; empty in public builds)
     "Guangzhou,CN",
     12, 0, 1, 1, 2025, 1,
     true,  // serialMonitorEnabled
