@@ -11,6 +11,7 @@ required. Features a modular recovery bootloader with wireless serial debugging.
 - [Settings Reference](docs/settings.md)
 - [Build & Flash](docs/build.md)
 - [Recovery Mode](docs/recovery.md)
+- [Troubleshooting](docs/troubleshooting.md)
 
 ## Key Features
 
