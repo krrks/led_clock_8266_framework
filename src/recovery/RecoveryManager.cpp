@@ -81,12 +81,12 @@ void RecoveryManager::begin() {
 
     // 2. Check RTC memory flag
     RTCData rtc = {}; bool rtcFlag = false;
-    if (ESP.rtcUserMemoryRead(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc))) {
-        if (rtc.magic == RTC_MAGIC && rtc.enterRecovery == 1) {
-            rtcFlag = true;
-            rtc.enterRecovery = 0;
-            ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
-        }
+    bool rtcValid = ESP.rtcUserMemoryRead(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc))
+                    && rtc.magic == RTC_MAGIC;
+    if (rtcValid && rtc.enterRecovery == 1) {
+        rtcFlag = true;
+        rtc.enterRecovery = 0;
+        ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
     }
 
     // 3. Boot window — watch for button hold
@@ -110,9 +110,29 @@ void RecoveryManager::begin() {
     }
 
     if (!crashReset && !rtcFlag && !bootHold) {
+        // Normal boot: re-arm crash logging for the next crash episode.
+        if (rtcValid && rtc.crashLogged) {
+            rtc.crashLogged = 0;
+            ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
+        }
         Serial.printf("[Recovery] normal boot: crash=%d rtc=%d btn=%d\n",
                       crashReset, rtcFlag, bootHold);
         return;
+    }
+
+    // Persist crash diagnostics once per crash episode (RTC flag prevents
+    // log spam while crash-looping; re-armed only by a normal boot above).
+    if (crashReset && !(rtcValid && rtc.crashLogged)) {
+        File f = LittleFS.open("/crash.log", "a");
+        if (f) {
+            f.printf("reset=%s\ninfo=%s\nheap=%u\n\n",
+                     rsn.c_str(), ESP.getResetInfo().c_str(), ESP.getFreeHeap());
+            f.close();
+        }
+        RTCData w = rtc;
+        w.magic = RTC_MAGIC;
+        w.crashLogged = 1;
+        ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&w), sizeof(w));
     }
 
     _active = true;

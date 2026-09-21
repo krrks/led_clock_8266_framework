@@ -75,7 +75,7 @@ private:
     AsyncWebSocket* _wsSerial = nullptr;
 
     static const uint32_t RTC_MAGIC = 0xC10CFA11UL;
-    struct RTCData { uint32_t magic; uint32_t enterRecovery; };
+    struct RTCData { uint32_t magic; uint32_t enterRecovery; uint32_t crashLogged; };
 
     void _startAP();
     void _startSTA();
