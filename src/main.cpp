@@ -69,7 +69,7 @@ int16_t weatherCode    = 0;
 float   weatherTemp    = 0.0f;
 char    weatherDesc[40]= "N/A";
 uint32_t mainColor     = 0xFFFFFF;
-const char FIRMWARE_VERSION[] = "1.011";
+const char FIRMWARE_VERSION[] = "1.014";
 volatile bool gRebootRequested = false;
 int     weatherFails   = 0;
 
@@ -119,6 +119,18 @@ static inline unsigned long scrollFrameMs() {
 // so upload handlers can pause/resume; redesign pending.
 void freezeWatchdogPause()  {}
 void freezeWatchdogResume() {}
+
+// ─── Boot self-test animation ─────────────────────────────────────────────
+// 8 FPS column sweep in the theme colour; called from setup()'s boot loop.
+static uint8_t bootAnimFrame = 0;
+
+static void drawBootAnimFrame() {
+    clearDisplay();
+    int col = bootAnimFrame % MATRIX_WIDTH;   // one column per frame → 4 s sweep
+    for (uint8_t r = 0; r < 7; r++) displayMatrix[r][col] = mainColor;
+    bootAnimFrame++;
+    flushDisplay();
+}
 
 static void updateStatusLED() {
     // Recovery pattern: two short blinks (150 ms), then ~5 s rest.
@@ -237,6 +249,7 @@ void setup() {
     curRotation    = configManager.data.rotation;
     curFlip        = configManager.data.flip;
     weatherEnabled = configManager.data.defaultWeather;
+    mainColor      = COLOR_PRESETS[configManager.data.colorIndex % 8];
     Serial.printf("[Boot] bright=%d rot=%d flip=%d spd=%d wx=%d wifi=%d\n",
                   configManager.data.brightness,
                   curRotation, curFlip, configManager.data.scrollSpeed,
@@ -293,13 +306,44 @@ void setup() {
         return;
     }
 
-    // ── WiFi ─────────────────────────────────────────────────────────────
+    // ── WiFi (non-blocking) + boot animation ─────────────────────────────
     if (appMode == AM_RECOVERY || configManager.data.wifiEnabled) {
         WiFiManager.setCredentials(configManager.data.wifiSSID,
                                    configManager.data.wifiPassword);
         WiFiManager.begin(appMode==AM_RECOVERY ? "LED-CLOCK"
                                                : configManager.data.projectName, 15000);
         wifiActive = true;
+
+        if (appMode == AM_NORMAL) {
+            const char* tz = strlen(configManager.data.timezone) > 0
+                             ? configManager.data.timezone : "HKT-8";
+            Serial.printf("[NTP] tz=%s\n", tz);
+            timeSync.begin(tz);
+
+            // Boot animation: 8 FPS frames + unified 1 s status checks,
+            // until WiFi is up (or AP) and NTP finished (or timed out).
+            unsigned long tBootAnimStart = millis();
+            unsigned long tFrame = 0, tCheck = 0, tWifiUp = 0;
+            bool wifiUp = false;
+            for (;;) {
+                unsigned long now = millis();
+                if (now - tFrame >= BOOT_ANIM_FRAME_MS) { tFrame = now; drawBootAnimFrame(); }
+                if (now - tCheck >= 1000) {
+                    tCheck = now;
+                    WiFiManager.loop();
+                    if (!wifiUp && WiFi.status() == WL_CONNECTED) { wifiUp = true; tWifiUp = now; }
+                    if (wifiUp) {
+                        if (timeSync.waitForSyncResult(0) == 0) ntpSynced = true;
+                        if (ntpSynced || now - tWifiUp >= NTP_BOOT_TIMEOUT_MS) break;
+                    } else if (WiFiManager.isCaptivePortal()) {
+                        break;   // AP mode — no internet, NTP impossible
+                    }
+                    if (now - tBootAnimStart >= BOOT_ANIM_MAX_MS) break;   // safety cap
+                }
+                yield();
+            }
+        }
+
         bool wifiOK = (WiFi.status()==WL_CONNECTED && !WiFiManager.isCaptivePortal());
         if (wifiOK) {
             Serial.printf("[WiFi] IP %s\n", WiFi.localIP().toString().c_str());
@@ -308,13 +352,7 @@ void setup() {
         }
 
         if (appMode == AM_NORMAL) {
-            const char* tz = strlen(configManager.data.timezone) > 0
-                             ? configManager.data.timezone : "HKT-8";
-            Serial.printf("[NTP] tz=%s\n", tz);
-            timeSync.begin(tz);
-
-            if (timeSync.waitForSyncResult(10000) == 0) {
-                ntpSynced = true;
+            if (ntpSynced) {
                 time_t n = time(nullptr); char tb[32];
                 strftime(tb, sizeof(tb), "%Y-%m-%d %H:%M:%S", localtime(&n));
                 Serial.printf("[NTP] synced %s\n", tb);
@@ -331,7 +369,8 @@ void setup() {
                 Serial.printf("[NTP] timeout — manual %02d:%02d\n",
                               configManager.data.manualHour, configManager.data.manualMinute);
             }
-            fetchWeather();
+            // Defer first weather fetch to WEATHER_BOOT_DELAY_MS after boot.
+            tLastWeather = millis() + WEATHER_INT_MS - WEATHER_BOOT_DELAY_MS;
         }
         if (wifiOK && appMode == AM_NORMAL) {
             dispMode = DM_IP; scrollOff = 0;
@@ -341,13 +380,20 @@ void setup() {
         WiFi.mode(WIFI_OFF); WiFi.forceSleepBegin();
         wifiActive = false;
         Serial.println("[WiFi] disabled — radio off");
+        // Short self-test only — no network to wait for.
+        for (int i = 0; i < 12; i++) { drawBootAnimFrame(); delay(BOOT_ANIM_FRAME_MS); }
     }
 
     webServer.begin();
     dash.begin(&webServer.wsDashboard(), DASH_INT_MS);
 
     unsigned long now = millis();
-    tLastActivity = tLastNtp = tLastWeather = tLastDash = tLastHeart = now;
+    tLastActivity = tLastDash = tLastHeart = now;
+    // tLastNtp: first retry NTP_RETRY_DELAY_MS after boot (self-heals a
+    // failed boot sync without waiting a full hour).
+    tLastNtp = now + NTP_INTERVAL_MS - NTP_RETRY_DELAY_MS;
+    // tLastWeather intentionally NOT reset: the first fetch is deferred to
+    // WEATHER_BOOT_DELAY_MS after boot (set in the WiFi block above).
     tLastDisplay  = 0;
     digitalWrite(STATUS_LED_PIN, HIGH);   // OFF after boot
     Serial.printf("[Boot] done  heap=%uB\n================================\n\n",

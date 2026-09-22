@@ -8,11 +8,13 @@
 
 class WiFiService {
 public:
-    // Try STA with saved credentials; on fail, start AP with given name.
-    // timeoutMs: how long to wait for STA connection (0 = no wait, return immediately)
+    // Non-blocking: starts STA with saved credentials and returns immediately.
+    // loop() completes the connection wait and switches to AP on timeout.
+    // timeoutMs: how long loop() waits for STA connection before AP fallback.
     void begin(const char* apName, unsigned long timeoutMs = 15000);
 
-    // Must be called in loop(). Handles DNS redirect for captive portal.
+    // Must be called in loop() (or any periodic context): completes the STA
+    // connection wait, switches to AP on timeout, handles captive-portal DNS.
     void loop();
 
     // True if device is in AP mode (not connected to any STA)
@@ -29,10 +31,16 @@ public:
     const char* password() const { return _pass.c_str(); }
 
 private:
+    void _enterAP();
+
     bool    _apMode = false;
     bool    _started = false;
+    bool    _announced = false;
     String  _ssid;
     String  _pass;
+    String  _apName;
+    unsigned long _connectTimeout = 15000;
+    unsigned long _tConnectStart  = 0;
     DNSServer _dnsServer;
 };
 

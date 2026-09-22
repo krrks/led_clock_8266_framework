@@ -41,7 +41,10 @@ static const uint8_t WX_ICONS[9][7] = {
     {0x00, 0x1E, 0x00, 0x3F, 0x00, 0x1E, 0x00},  // 8 mist / fog
 };
 
-// OWM condition code → glyph index (nullptr = no data, icon off)
+// Placeholder shown while weather is enabled but no data has arrived yet
+static const uint8_t WX_ICON_NO_DATA[7] = {0x1E, 0x21, 0x01, 0x06, 0x08, 0x00, 0x08};  // "?"
+
+// OWM condition code → glyph index (nullptr = unknown code, icon off)
 static const uint8_t* wxIconGlyph(int16_t code) {
     if (code == 800)                 return WX_ICONS[0];
     if (code == 801)                 return WX_ICONS[1];
@@ -195,8 +198,10 @@ void drawClockFace() {
          drawChar(d[3], x, mainColor);
 
     // ── Weather icon: cols 26-31 (6×7), monochrome theme colour ──────────
-    if (weatherEnabled && weatherCode != 0) {
-        const uint8_t* icon = wxIconGlyph(weatherCode);
+    // "?" placeholder while enabled but no data yet; off when disabled.
+    if (weatherEnabled) {
+        const uint8_t* icon = (weatherCode != 0) ? wxIconGlyph(weatherCode)
+                                                 : WX_ICON_NO_DATA;
         if (icon) {
             for (uint8_t r = 0; r < 7; r++)
                 for (uint8_t c = 0; c < 6; c++)
@@ -223,6 +228,8 @@ void drawTempFace() {
     char s[12];
     if (weatherEnabled && weatherCode != 0)
         snprintf(s, sizeof(s), "%.1fC", weatherTemp);
+    else if (weatherEnabled)
+        strlcpy(s, "--.-C", sizeof(s));   // enabled, data not arrived yet
     else
         strlcpy(s, "WX OFF", sizeof(s));
     int w = strPxW(s);
