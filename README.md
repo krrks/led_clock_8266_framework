@@ -29,6 +29,6 @@ The recovery module ([src/recovery/](src/recovery/)) is designed to be
 its own web UI (OTA update, file management, wireless serial monitor) and has no
 dependency on clock-specific code.
 
-It is currently maintained on the `feature/modular-recovery-bootloader` branch.
-**Planned:** extract the module into a standalone repository/library so other
-projects can depend on it directly — keep that branch until the split is done.
+The module is published as a standalone copy on the **orphan branch
+`recovery-module`** (no shared history — ready to be exported into its own
+repository). The clock firmware keeps the module integrated in `src/recovery/`.
