@@ -7,6 +7,13 @@
 #include <ArduinoJson.h>
 #include <user_interface.h>
 
+// ─── Host-app hooks (weak — keeps the module self-contained when reused) ──
+// The host app provides the firmware version and the freeze-watchdog
+// pause/resume; standalone reuse links fine without them.
+extern const char FIRMWARE_VERSION[] __attribute__((weak));
+void freezeWatchdogPause()  __attribute__((weak));
+void freezeWatchdogResume() __attribute__((weak));
+
 // ─── Serial Redirect ────────────────────────────────────────────────────
 
 SerialRedirect::SerialRedirect(HardwareSerial& hw, bool wired, bool wireless)
@@ -110,9 +117,11 @@ void RecoveryManager::begin() {
     }
 
     if (!crashReset && !rtcFlag && !bootHold) {
-        // Normal boot: re-arm crash logging for the next crash episode.
-        if (rtcValid && rtc.crashLogged) {
+        // Normal boot: re-arm crash logging + clear the crash counter for
+        // the next crash episode.
+        if (rtcValid && (rtc.crashLogged || rtc.crashCount)) {
             rtc.crashLogged = 0;
+            rtc.crashCount  = 0;
             ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
         }
         Serial.printf("[Recovery] normal boot: crash=%d rtc=%d btn=%d\n",
@@ -122,20 +131,44 @@ void RecoveryManager::begin() {
 
     // Persist crash diagnostics once per crash episode (RTC flag prevents
     // log spam while crash-looping; re-armed only by a normal boot above).
-    if (crashReset && !(rtcValid && rtc.crashLogged)) {
-        File f = LittleFS.open("/crash.log", "a");
-        if (f) {
-            f.printf("reset=%s\ninfo=%s\nheap=%u\n\n",
-                     rsn.c_str(), ESP.getResetInfo().c_str(), ESP.getFreeHeap());
-            f.close();
+    // Also count consecutive crashes — repeated ones disable the 2 h
+    // auto-reboot so the device stays in recovery for OTA repair instead
+    // of crash-cycling forever.
+    if (crashReset) {
+        if (!rtcValid) rtc.magic = RTC_MAGIC;
+        if (rtc.crashCount > 16) rtc.crashCount = 0;  // RTC garbage guard (power-cycle junk)
+        if (rtc.crashCount < 255) rtc.crashCount++;
+
+        if (_autoRebootEnabled && rtc.crashCount >= CRASH_LOOP_MAX) {
+            _autoRebootEnabled = false;
+            Serial.printf("[Recovery] %u consecutive crashes — auto-reboot disabled\n",
+                          rtc.crashCount);
         }
-        RTCData w = rtc;
-        w.magic = RTC_MAGIC;
-        w.crashLogged = 1;
-        ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&w), sizeof(w));
+
+        if (!rtc.crashLogged) {
+            // Crash-only storage logging (no normal-operation logs are ever
+            // written). Bounded: truncate when the log exceeds ~2 KB.
+            File f = LittleFS.open("/crash.log", "a");
+            if (!f) f = LittleFS.open("/crash.log", "w");
+            if (f) {
+                if (f.size() > 2048) {
+                    f.close();
+                    f = LittleFS.open("/crash.log", "w");
+                }
+                f.printf("reset=%s\ninfo=%s\nheap=%u\n\n",
+                         rsn.c_str(), ESP.getResetInfo().c_str(), ESP.getFreeHeap());
+                f.close();
+            } else {
+                Serial.println(F("[Recovery] WARNING: cannot write /crash.log"));
+            }
+            rtc.crashLogged = 1;
+        }
+        ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc));
     }
 
     _active = true;
+    _recoveryStartMs = millis();
+    _crashCount = rtc.crashCount;
     Serial.printf("[Recovery] ENTERING: crash=%d rtc=%d btn=%d\n",
                   crashReset, rtcFlag, bootHold);
 
@@ -153,6 +186,7 @@ void RecoveryManager::begin() {
     SerialOut.setWiredEnabled(serialMonitorEnabled);
     SerialOut.setWirelessEnabled(wirelessSerialEnabled);
 }
+
 
 void RecoveryManager::_startSTA() {
     WiFi.mode(WIFI_STA);
@@ -191,8 +225,8 @@ void RecoveryManager::_startWebServer() {
                           req->client()->remoteIP().toString().c_str());
             req->send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
             if (!Update.hasError()) {
-                Serial.println("[Recovery] firmware OK — rebooting");
-                delay(200); ESP.restart();
+                Serial.println("[Recovery] firmware OK — deferred reboot");
+                requestReboot();   // restart happens in the host main loop
             }
         },
         [this](AsyncWebServerRequest* req, String filename, size_t index,
@@ -356,13 +390,16 @@ void RecoveryManager::_startWebServer() {
     _server->addHandler(_wsSerial);
 
     // ── System info ───────────────────────────────────────────────────
-    _server->on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
+    _server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
         Serial.printf("[Recovery] GET /api/status from %s\n",
                       req->client()->remoteIP().toString().c_str());
         JsonDocument doc;
         doc["heap"]     = ESP.getFreeHeap();
         doc["uptime"]   = millis() / 1000;
         doc["reset"]    = ESP.getResetReason();
+        doc["resetInfo"]= ESP.getResetInfo();   // includes crash epc when Exception/WDT
+        doc["crashCount"] = _crashCount;
+        doc["version"]  = FIRMWARE_VERSION ? FIRMWARE_VERSION : "n/a";
         doc["flashSize"] = ESP.getFlashChipRealSize();
         doc["sketchSize"]= ESP.getSketchSize();
         String json;
@@ -381,14 +418,14 @@ void RecoveryManager::_startWebServer() {
                       req->client()->remoteIP().toString().c_str());
         RTCData rtc = { RTC_MAGIC, 0 };
         if (ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&rtc), sizeof(rtc))) {
-            Serial.println(F("[Recovery] RTC cleared — rebooting to normal"));
+            Serial.println(F("[Recovery] RTC cleared — deferred reboot to normal"));
             req->send(200, "text/plain", "OK");
+            requestReboot();
         } else {
             Serial.println(F("[Recovery] RTC write failed"));
             req->send(500, "text/plain", "RTC write failed");
             return;
         }
-        delay(200); ESP.restart();
     });
 
     // ── Root — serve recovery SPA ─────────────────────────────────────
@@ -409,10 +446,12 @@ void RecoveryManager::_handleUpload(AsyncWebServerRequest*, String filename,
         uint32_t maxSize = (uint32_t)ESP.getFreeSketchSpace() & 0xFFFFF;
         Serial.printf("[Recovery] OTA begin: %s max=%uB\n",
                       filename.c_str(), maxSize);
+        if (freezeWatchdogPause) freezeWatchdogPause();  // slow upload must not trip the watchdog
         Update.begin(maxSize, U_FLASH);
     }
     if (len) Update.write(data, len);
     if (final) {
+        if (freezeWatchdogResume) freezeWatchdogResume();
         Update.end(true);
         Serial.println(F("[Recovery] OTA done"));
     }
@@ -572,6 +611,15 @@ void RecoveryManager::loop() {
     if (!_active) return;
     if (_apMode) _dnsServer.processNextRequest();
     _broadcastSerial();
+
+    // Watchdog: auto-reboot out of recovery after 2 h so the device doesn't
+    // sit in recovery forever when nobody is around to exit it. Disabled
+    // when the device is crash-looping (stays in recovery for repair).
+    if (_autoRebootEnabled && millis() - _recoveryStartMs >= AUTO_REBOOT_MS) {
+        Serial.println("[Recovery] 2 h watchdog — rebooting to normal");
+        delay(100);
+        ESP.restart();
+    }
 }
 
 // Recovery web UI — see src/recovery/RecoveryHTML.h

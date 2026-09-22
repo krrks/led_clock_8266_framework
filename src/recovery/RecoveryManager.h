@@ -64,18 +64,35 @@ public:
     void trigger();         // Software trigger — write RTC flag + reboot
     bool isActive() const { return _active; }
 
+    // Deferred reboot: web callbacks set the flag, the host main loop calls
+    // takeRebootRequest() and performs the actual restart (calling
+    // ESP.restart() from the AsyncTCP sys context crashes wdt_feed).
+    void requestReboot() { _rebootRequested = true; }
+    bool takeRebootRequest() {
+        bool r = _rebootRequested;
+        _rebootRequested = false;
+        return r;
+    }
+
     static RecoveryManager& get();
 
 private:
     bool _active = false;
     bool _apMode = false;
+    bool _autoRebootEnabled = true;
+    bool _rebootRequested = false;
+    unsigned long _recoveryStartMs = 0;
+    uint32_t _crashCount = 0;
+
+    static const unsigned long AUTO_REBOOT_MS = 2UL * 3600UL * 1000UL;  // 2 h
+    static const uint32_t        CRASH_LOOP_MAX = 3;                    // consecutive crashes that disable auto-reboot
 
     AsyncWebServer* _server = nullptr;
     DNSServer       _dnsServer;
     AsyncWebSocket* _wsSerial = nullptr;
 
     static const uint32_t RTC_MAGIC = 0xC10CFA11UL;
-    struct RTCData { uint32_t magic; uint32_t enterRecovery; uint32_t crashLogged; };
+    struct RTCData { uint32_t magic; uint32_t enterRecovery; uint32_t crashLogged; uint32_t crashCount; };
 
     void _startAP();
     void _startSTA();

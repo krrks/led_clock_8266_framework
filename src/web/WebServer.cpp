@@ -189,7 +189,7 @@ void WebServer::_setupRoutes() {
         Serial.printf("[Web] POST /api/reboot from %s\n",
                       req->client()->remoteIP().toString().c_str());
         req->send(200, "text/plain", "rebooting");
-        delay(200); ESP.restart();
+        gRebootRequested = true;   // restart happens in the main loop
     });
 
     _server->on("/api/serial", HTTP_GET, [](AsyncWebServerRequest* req) {
@@ -255,7 +255,7 @@ void WebServer::_setupRoutes() {
                           req->client()->remoteIP().toString().c_str());
             req->send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
             if (!Update.hasError()) {
-                delay(200); ESP.restart();
+                gRebootRequested = true;   // restart happens in the main loop
             }
         },
         [this](AsyncWebServerRequest* req, String fn, size_t idx,
@@ -374,6 +374,7 @@ void WebServer::_handleStatusGet(AsyncWebServerRequest* req) {
     doc["sketchSize"] = ESP.getSketchSize();
     doc["reset"]      = ESP.getResetReason();
     doc["ntpSynced"]  = ntpSynced;
+    doc["version"]    = FIRMWARE_VERSION;
     String json;
     serializeJson(doc, json);
     req->send(200, "application/json", json);
@@ -386,11 +387,13 @@ void WebServer::_handleFirmwareUpload(AsyncWebServerRequest*, String filename,
     if (!index) {
         uint32_t maxSize = (uint32_t)ESP.getFreeSketchSpace() & 0xFFFFF;
         Serial.printf("[Web] OTA begin: %s max=%uB\n", filename.c_str(), maxSize);
+        freezeWatchdogPause();   // don't let a slow upload trip the watchdog
         Update.begin(maxSize, U_FLASH);
     }
     if (len) Update.write(data, len);
     if (final) {
         Update.end(true);
+        freezeWatchdogResume();
         Serial.println(F("[Web] OTA done"));
     }
 }

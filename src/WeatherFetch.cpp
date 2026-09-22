@@ -99,10 +99,9 @@ void fetchWeather() {
 
     if (!ok && !cfgErr && !serverErr) {
         weatherFails++;
-        Serial.printf("[Weather] network fail %d / %d\n", weatherFails, WEATHER_FAIL_MAX);
-        if (weatherFails >= WEATHER_FAIL_MAX) {
-            Serial.printf("[Weather] %d consecutive failures → recovery\n", weatherFails);
-            triggerRecovery();
-        }
+        // Network problems with the weather API must NOT trigger recovery —
+        // just log and keep retrying on the hourly schedule.
+        Serial.printf("[Weather] network fail %d / %d (no recovery)\n",
+                      weatherFails, WEATHER_FAIL_MAX);
     }
 }

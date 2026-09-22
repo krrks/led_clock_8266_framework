@@ -18,6 +18,9 @@ static const uint32_t COLOR_PRESETS[8] = {
     0x8800CC,  // 7 purple
 };
 
+// ─── Firmware version (defined in main.cpp) ───────────────────────────────
+extern const char FIRMWARE_VERSION[];
+
 // ─── Compile-time constants ───────────────────────────────────────────────
 static const unsigned long BOOT_WINDOW_MS   = 3000UL;
 static const unsigned long IDLE_TIMEOUT_MS  = 30000UL;
@@ -32,6 +35,7 @@ static const unsigned long FACE_TIMEOUT_MS  = 8000UL;  // non-clock faces auto-r
 static const unsigned long PAGE_IP_MS       = 3000UL;  // IP paged display: ms per page
 static const unsigned long SETTINGS_TIMEOUT = 30000UL;
 static const int           WEATHER_FAIL_MAX = 5;
+static const uint32_t      HEAP_LOW_WATER   = 6000;  // below this → proactive recovery
 
 // ─── Application mode ─────────────────────────────────────────────────────
 enum AppMode : uint8_t { AM_NORMAL, AM_SETTINGS, AM_RECOVERY };
@@ -100,9 +104,16 @@ extern unsigned long tLastDash;
 extern unsigned long tLastActivity;
 extern unsigned long tLastHeart;
 extern unsigned long tFaceUntil;
-extern unsigned long tLedBlink;
-extern bool          ledBlinkState;
 
 // ─── Shared helpers (defined in main.cpp) ─────────────────────────────────
 // Triggers a pending redraw so next flushDisplay() picks up the new brightness.
 void applyBrightness();
+
+// Freeze watchdog pause/resume — upload handlers pause it while flashing so
+// a slow OTA upload can't trip the watchdog mid-write.
+void freezeWatchdogPause();
+void freezeWatchdogResume();
+
+// Deferred reboot — web callbacks (sys context) set this instead of calling
+// ESP.restart() directly; the main loop performs the actual restart.
+extern volatile bool gRebootRequested;

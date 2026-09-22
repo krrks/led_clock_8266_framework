@@ -69,6 +69,8 @@ int16_t weatherCode    = 0;
 float   weatherTemp    = 0.0f;
 char    weatherDesc[40]= "N/A";
 uint32_t mainColor     = 0xFFFFFF;
+const char FIRMWARE_VERSION[] = "1.011";
+volatile bool gRebootRequested = false;
 int     weatherFails   = 0;
 
 uint8_t  curRotation   = 0;
@@ -92,8 +94,6 @@ unsigned long tLastDash     = 0;
 unsigned long tLastActivity = 0;
 unsigned long tLastHeart    = 0;
 unsigned long tFaceUntil    = 0;
-unsigned long tLedBlink     = 0;
-bool          ledBlinkState = false;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Module-local
@@ -113,12 +113,26 @@ static inline unsigned long scrollFrameMs() {
 }
 
 // ── Status LED (GPIO2, active LOW) ────────────────────────────────────────
+// ─── Freeze watchdog ──────────────────────────────────────────────────────
+// REMOVED (v1.010): the Ticker-based freeze watchdog crashed inside the SDK
+// timer ISR (wdt_feed, LoadStoreError) ~26 s after boot. The stubs remain
+// so upload handlers can pause/resume; redesign pending.
+void freezeWatchdogPause()  {}
+void freezeWatchdogResume() {}
+
 static void updateStatusLED() {
+    // Recovery pattern: two short blinks (150 ms), then ~5 s rest.
+    static uint8_t        blinkStep  = 0;
+    static unsigned long  tBlinkStep = 0;
+
     if (appMode == AM_RECOVERY) {
         unsigned long now = millis();
-        if (now - tLedBlink >= 1000UL) {
-            tLedBlink = now; ledBlinkState = !ledBlinkState;
-            digitalWrite(STATUS_LED_PIN, ledBlinkState ? LOW : HIGH);
+        unsigned long dur = (blinkStep == 3) ? 5000UL : 150UL;
+        if (now - tBlinkStep >= dur) {
+            tBlinkStep = now;
+            blinkStep = (blinkStep + 1) % 4;
+            bool on = (blinkStep == 0) || (blinkStep == 2);
+            digitalWrite(STATUS_LED_PIN, on ? LOW : HIGH);
         }
     } else {
         digitalWrite(STATUS_LED_PIN, HIGH);   // OFF (active-low)
@@ -196,7 +210,7 @@ void setup() {
     Serial.begin(115200, SERIAL_8N1, SERIAL_TX_ONLY);
     delay(100);
     Serial.println(F("\n================================"));
-    Serial.println(F("  LED Matrix Clock  v1.008"));
+    Serial.printf("  LED Matrix Clock  v%s\n", FIRMWARE_VERSION);
     Serial.println(F("================================"));
     Serial.printf("[Sys] Reset:%s  Heap:%uB  CPU:%uMHz\n",
                   ESP.getResetReason().c_str(), ESP.getFreeHeap(), ESP.getCpuFreqMHz());
@@ -344,6 +358,15 @@ void setup() {
 // loop()
 // ─────────────────────────────────────────────────────────────────────────
 void loop() {
+    // Deferred reboot — web handlers must NOT call ESP.restart() from the
+    // AsyncTCP sys context (it corrupts the SDK timer state → wdt_feed crash).
+    if (gRebootRequested || RecoveryManager::get().takeRebootRequest()) {
+        gRebootRequested = false;
+        Serial.println(F("[Sys] deferred reboot"));
+        delay(50);
+        ESP.restart();
+    }
+
     RecoveryManager::get().loop();   // web server + serial broadcast in recovery
     if (RecoveryManager::get().isActive()) {
         updateStatusLED();
@@ -495,6 +518,11 @@ void loop() {
     // ════════════════════════════════════════════════════════════════════
     // Background tasks
     // ════════════════════════════════════════════════════════════════════
+    if (appMode == AM_NORMAL && ESP.getFreeHeap() < HEAP_LOW_WATER) {
+        Serial.printf("[Heap] low heap %u B → recovery\n", ESP.getFreeHeap());
+        triggerRecovery();
+    }
+
     if (appMode == AM_NORMAL) {
         if (now - tLastDash >= (unsigned long)DASH_INT_MS) {
             tLastDash = now; updateDashboard();
@@ -510,6 +538,7 @@ void loop() {
         }
     }
     if (now - tLastHeart >= HEARTBEAT_MS) { tLastHeart = now; printHeartbeat(); }
+
 
     updateStatusLED();
 

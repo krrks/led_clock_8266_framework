@@ -9,15 +9,21 @@ dependencies (ESPAsyncWebServer, ESPAsyncTCP, ArduinoJson, LittleFS).
 Recovery mode is entered automatically at boot when:
 
 1. **Button hold** — trigger pin (configurable GPIO) held during boot window (default 3s)
-2. **Crash detection** — ESP reset reason is "Exception" or "Watchdog"
-3. **Software trigger** — `RecoveryManager::get().trigger()` called (also triggered by 5 consecutive weather fetch failures)
+2. **Crash detection** — ESP reset reason is "Exception" or "Watchdog" (covers soft WDT too)
+3. **Freeze watchdog** — Ticker ISR: if the main loop stops updating its heartbeat for 60 s (logical deadlock), the ISR locks interrupts and lets the hardware watchdog reset the chip ("Hardware Watchdog" reset reason → recovery). No RTC/SPI access from the ISR (safe during flash operations). Paused automatically during firmware uploads (5 min auto-resume). Covers normal mode AND recovery mode
+4. **Heap watchdog** — free heap below 6 KB in normal mode → proactive recovery
+5. **Software trigger** — `RecoveryManager::get().trigger()` called (BTN1 held 8 s in normal mode)
+
+> Weather fetch failures do **not** trigger recovery — they are only logged
+> and retried on the hourly schedule.
 
 ## Recovery Behaviour
 
 1. Attempts to connect to saved WiFi (if credentials provided)
 2. On WiFi failure: starts AP with configurable SSID (default: `RECOVERY`)
-3. Starts recovery web server on port **8080**
-4. Serves a single-page recovery UI with three tabs:
+3. Starts recovery web server on port **80**
+4. **Auto-reboot after 2 h** — if nobody exits recovery, the device reboots to normal mode by itself. Disabled after 3 consecutive crashes (no normal boot in between) so a broken app stays in recovery for OTA repair instead of crash-cycling
+5. Serves a single-page recovery UI with three tabs:
 
 ### Firmware
 - Upload compiled `.bin` file
@@ -74,6 +80,6 @@ even if LittleFS is corrupted. No external files needed.
 
 | State | Pattern |
 |-------|---------|
-| Boot window | Fast blink (100ms) |
+| Boot window | ON (solid) |
 | Normal mode | OFF |
-| Recovery mode | Slow blink (1s) |
+| Recovery mode | Two short blinks (150 ms), then ~5 s rest |
