@@ -87,14 +87,22 @@ def get_path(obj, path):
 
 
 def load_key_from_file():
-    """Read the first non-empty, non-comment line of tools/key (next to
-    this script)."""
+    """Parse tools/key (next to this script). Supports:
+    - key = value lines: returns the value of 'weather_api_key'
+    - bare line (legacy): the line itself is the key
+    """
     key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "key")
     try:
         with open(key_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line and not line.startswith("#"):
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip() == "weather_api_key" and v.strip():
+                        return v.strip()
+                else:
                     return line
     except OSError:
         pass
