@@ -222,29 +222,39 @@ void WebServer::_setupRoutes() {
         cmd.toLowerCase();
         Serial.printf("[Web] GET /api/command?cmd=%s from %s\n",
                       cmd.c_str(), req->client()->remoteIP().toString().c_str());
-        String r;
+        // Fixed buffer + snprintf instead of a String += chain: the chained
+        // concatenation fragmented/corrupted the heap from the async web
+        // context and crashed with a LoadStoreError (see docs/troubleshooting.md).
+        char r[256] = {0};
         if (cmd == "status" || cmd == "stats") {
-            r += "heap=" + String(ESP.getFreeHeap()) + "\n";
-            r += "uptime=" + String(millis() / 1000) + "\n";
-            r += "reset=" + ESP.getResetReason() + "\n";
-            r += "ntp=" + String(ntpSynced ? "1" : "0") + "\n";
-            r += "wifi=" + String(WiFi.status() == WL_CONNECTED ? "connected" : "disconnected") + "\n";
-            if (WiFi.status() == WL_CONNECTED)
-                r += "ip=" + WiFi.localIP().toString() + "\n";
-            r += "sketch=" + String(ESP.getSketchSize()) + "\n";
+            IPAddress ip = WiFi.localIP();
+            snprintf(r, sizeof(r),
+                     "heap=%lu\nuptime=%lu\nreset=%s\nntp=%d\nwifi=%s\n"
+                     "ip=%d.%d.%d.%d\nsketch=%lu\n",
+                     (unsigned long)ESP.getFreeHeap(),
+                     (unsigned long)(millis() / 1000),
+                     ESP.getResetReason().c_str(),
+                     ntpSynced ? 1 : 0,
+                     WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
+                     ip[0], ip[1], ip[2], ip[3],
+                     (unsigned long)ESP.getSketchSize());
         } else if (cmd == "heap") {
-            r = String(ESP.getFreeHeap());
+            snprintf(r, sizeof(r), "%lu", (unsigned long)ESP.getFreeHeap());
         } else if (cmd == "reboot") {
             req->send(200, "text/plain", "rebooting");
             delay(200); ESP.restart();
             return;
         } else if (cmd == "wifi") {
-            r += "status=" + String(WiFi.status() == WL_CONNECTED ? "connected" : "disconnected") + "\n";
-            r += "mode=" + String(WiFi.getMode() == WIFI_AP ? "AP" : "STA") + "\n";
-            r += "ip=" + WiFi.localIP().toString() + "\n";
-            r += "ap_ip=" + WiFi.softAPIP().toString() + "\n";
+            IPAddress ip = WiFi.localIP();
+            IPAddress ap = WiFi.softAPIP();
+            snprintf(r, sizeof(r),
+                     "status=%s\nmode=%s\nip=%d.%d.%d.%d\nap_ip=%d.%d.%d.%d\n",
+                     WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
+                     WiFi.getMode() == WIFI_AP ? "AP" : "STA",
+                     ip[0], ip[1], ip[2], ip[3],
+                     ap[0], ap[1], ap[2], ap[3]);
         } else {
-            r = "unknown cmd: " + cmd;
+            snprintf(r, sizeof(r), "unknown cmd: %s", cmd.c_str());
         }
         req->send(200, "text/plain", r);
     });
