@@ -25,3 +25,28 @@
 
 Connect one terminal of each button to the GPIO pin, other terminal to GND.
 Internal pull-up is enabled in software — no external resistors needed.
+
+## Free & Safe GPIOs
+
+| GPIO | D1 Mini | Use | Notes |
+|------|---------|-----|-------|
+| 4  | D2  | Input / output | **Best choice** — no strapping/UART conflict |
+| 16 | D0  | Output only | RTC/WAKE pin: no internal pull-up, no interrupt |
+| 15 | D8  | Input / output | MTDO strap — keep LOW at boot (module already pulls down) |
+| A0 | ADC | Analog input | 0–1 V only; use a voltage divider for battery monitoring |
+
+## Boot / Flashing Strapping Pins
+
+These are sampled at power-on; keep them in the required state, or the chip
+enters the wrong mode / fails to boot:
+
+| GPIO | Role | Required at boot |
+|------|------|------------------|
+| 0  | Boot mode (LOW → UART flash) | HIGH (module pull-up) |
+| 2  | Boot mode + status LED | HIGH (module pull-up) |
+| 15 | MTDO | LOW (module pull-down) |
+| 12 | MTDI (flash voltage) | LOW — don't add an external pull-up |
+| 1  | UART TX (boot ROM log) | — |
+| 3  | UART RX + matrix data | — |
+
+GPIO6–11 are wired to the SPI flash and are not broken out — unavailable.

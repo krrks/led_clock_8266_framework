@@ -22,6 +22,21 @@ required. Features a modular recovery bootloader with wireless serial debugging.
 - **Plain HTML/CSS/JS web UI** — no React/Node build step required
 - **GitHub Actions CI/CD** — auto-builds firmware + LittleFS image on push/release
 
+## GPIO Map
+
+| GPIO | D1 Mini | Use | Notes |
+|------|---------|-----|-------|
+| 5 / 14 / 12 / 13 | D1/D5/D6/D7 | BTN1–4 | INPUT_PULLUP, active LOW |
+| 2  | D4 | Status LED | active LOW (onboard) |
+| 3  | RX/D9 | Matrix data | I2S DMA; shared with TTL RX |
+| 4  | D2 | **Free** | Safe for input/output |
+| 16 | D0 | **Free** | Output only (no pull-up/interrupt) |
+| 15 | D8 | **Free** | Keep LOW at boot |
+| A0 | ADC | **Free** | Analog 0–1 V (battery monitor) |
+
+Avoid GPIO0 (flash mode), GPIO1 (UART TX), GPIO6–11 (SPI flash, not broken out), and
+don't add an external pull-up on GPIO12 (MTDI strap). Full details: [docs/hardware.md](docs/hardware.md).
+
 ## Recovery Module Roadmap
 
 The recovery module ([src/recovery/](src/recovery/)) is designed to be
